@@ -16,7 +16,7 @@ Path planning: plans a collision-free path on /map for each leg of the lap and s
 #                                 publish_path, request_ore_package, spawn_done,
 #                                 at_pose, process_planning
 # Nodes:		    ebot_planner_node
-#			        Publishing Topics  - [ /ebot_path ]
+#			        Publishing Topics  - [ /ebot_path, /path_planning/status ]
 #                   Subscribing Topics - [ /map, /odom ]
 #                   Service Clients    - [ /spawn_ore_package ]
 
@@ -24,6 +24,7 @@ Path planning: plans a collision-free path on /map for each leg of the lap and s
 ################### IMPORT MODULES #######################
 
 import sys
+import json
 import math
 import heapq
 
@@ -36,6 +37,7 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDur
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from std_srvs.srv import Trigger
+from std_msgs.msg import String
 
 
 ##################### TASK CONSTANTS #######################
@@ -165,6 +167,7 @@ class ebot_planner(Node):
         ############ Topic PUBLISHERS ############
 
         self.path_pub = self.create_publisher(Path, path_topic, latched)                # the follower drives what is published here
+        self.status_pub = self.create_publisher(String, '/path_planning/status', 10)    # lap progress, as JSON, for the dashboard
 
         ############ Service CLIENTS ############
 
@@ -587,6 +590,11 @@ class ebot_planner(Node):
             self.planning_cycle()
         except Exception as e:      # an uncaught exception would kill the node
             self.get_logger().error(f'Planning error: {e}')
+        msg = String()
+        msg.data = json.dumps({'step': min(self.step + 1, len(steps)), 'steps': len(steps), 'state': self.state,
+                               'path_lengths': [round(d, 3) for d in self.path_lengths],
+                               'package': self.spawned_at is not None})
+        self.status_pub.publish(msg)
 
 
     def planning_cycle(self):
