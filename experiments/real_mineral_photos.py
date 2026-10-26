@@ -10,7 +10,8 @@ from the median border colour by more than a set distance in Lab. Then:
     wins if it covers at least 1% of the specimen;
   * voting:   classify_face() from ore_perception.py on the specimen mask.
 
-The thresholds were set on the simulator and are not tuned on these photos.
+The vote's thresholds were calibrated on photos 000-029 of each mineral
+(calibrate_colour.py); photos 030-059 are held out.
 
     python3 experiments/real_mineral_photos.py
 
@@ -74,6 +75,14 @@ def main():
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
+    held = [x for x in rows if int(os.path.basename(x['photo'])[:3]) >= 30]
+    print('held-out photos (030-059 of each mineral; calibrate_colour.py tunes on 000-029):')
+    summary(held)
+    print('all photos:')
+    summary(rows)
+
+
+def summary(rows):
     for cls in ('azurite_ore', 'malachite_ore', 'vanadinite_ore'):
         r = [x for x in rows if x['true'] == cls]
         n = len(r)
