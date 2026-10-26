@@ -15,10 +15,10 @@ not all of it, shows that mineral's colour.
 # Functions:
 #			        back_project, find_faces, colour_shares, classify_face, main
 #                   ore_tf: depthimagecb, colorimagecb, caminfocb, camera_to_base,
-#                           detect, name_ores, track_ores, publish_transforms,
+#                           detect, publish_status, name_ores, track_ores, publish_transforms,
 #                           process_image, step
 # Nodes:		    ore_tf_publisher
-#			        Publishing Topics  - [ /tf ]
+#			        Publishing Topics  - [ /tf, /ore_perception/status ]
 #                   Subscribing Topics - [ /camera/camera/color/image_raw,
 #                                          /camera/camera/aligned_depth_to_color/image_raw,
 #                                          /camera/camera/color/camera_info, /tf, /tf_static ]
@@ -27,6 +27,7 @@ not all of it, shows that mineral's colour.
 ################### IMPORT MODULES #######################
 
 import sys
+import json
 from collections import Counter, deque
 
 import cv2
@@ -38,6 +39,7 @@ from rclpy.time import Time
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import String
 from scipy.spatial.transform import Rotation
 import tf2_ros
 
@@ -228,6 +230,12 @@ class ore_tf(Node):
         self.depth_cam_sub = self.create_subscription(Image, depth_topic, self.depthimagecb, 10)
         self.cam_info_sub = self.create_subscription(CameraInfo, camera_info_topic, self.caminfocb, 10)
 
+        ############ Topic PUBLISHERS ############
+
+        # What this node sees, as JSON, for the dashboard: each face's outline in the image,
+        # its mineral and colour shares, and the named ores.
+        self.status_pub = self.create_publisher(String, '/ore_perception/status', 10)
+
         ############ Constructor VARIABLES/OBJECTS ############
 
         image_processing_rate = 0.1
@@ -247,6 +255,7 @@ class ore_tf(Node):
         self.candidates = []            # [(mineral or None, position)] gathered before naming
         self.history = {}               # ore name -> recent face positions in base_link
         self.named = False
+        self.last_view = []             # this frame's faces, for the status message
 
         self.get_logger().info('Ore perception node initialised.')
 
@@ -331,10 +340,27 @@ class ore_tf(Node):
         xyz = back_project(self.depth_image, self.intrinsics, cam_to_base)
         hsv = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2HSV)
         found = []
+        self.last_view = []
         for mask, centre in find_faces(xyz):
-            mineral, _ = classify_face(hsv, mask)
+            mineral, shares = classify_face(hsv, mask)
             found.append((mineral, centre))
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            box = cv2.boxPoints(cv2.minAreaRect(max(contours, key=cv2.contourArea)))
+            self.last_view.append({'mineral': mineral, 'shares': {k: round(v, 3) for k, v in shares.items()},
+                                   'box': box.round(1).tolist(), 'centre': np.round(centre, 4).tolist()})
         return found
+
+
+    def publish_status(self):
+        '''
+        Description:    Publish what this node currently sees, as JSON on
+                        /ore_perception/status.
+        '''
+        ores = {n: np.round(np.median(np.array(h), axis=0), 4).tolist() for n, h in self.history.items()}
+        msg = String()
+        msg.data = json.dumps({'phase': 'tracking' if self.named else 'naming', 'frames_seen': self.frames_seen,
+                               'faces': self.last_view, 'ores': ores})
+        self.status_pub.publish(msg)
 
 
     def name_ores(self):
@@ -436,6 +462,7 @@ class ore_tf(Node):
             return
 
         found = self.detect(cam_to_base)
+        self.publish_status()
         if self.named:
             self.track_ores(found)
             return
