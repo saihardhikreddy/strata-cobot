@@ -39,7 +39,7 @@ India}
 \maketitle
 
 \begin{abstract}
-This paper presents a robotics course project in which a UR7e manipulator and a four-wheeled mobile robot (eBot) cooperate to sort and haul ore in a Gazebo simulation. The manipulator detects ores with an RGB-D camera, picks each with a magnetic tool and drops it in the container for its mineral. The mobile robot plans its own collision-free paths on an occupancy grid and follows them while collecting an ore package. All perception, inverse kinematics, motion planning and path planning were written from first principles, without ready-made planners such as MoveIt~2 or Nav2. Ore positions are estimated to within 1--3~mm, inverse kinematics plans in 0.1--0.4~s, and planned paths are as short as a reference shortest path. Across repeated trials the manipulator sorted every ore into the correct container and the mobile robot completed every lap, with no collision and no safety stop.
+This paper presents a robotics course project in which a UR7e manipulator and a four-wheeled mobile robot (eBot) cooperate to sort and haul ore in a Gazebo simulation. The manipulator detects ores with an RGB-D camera, picks each with a magnetic tool and drops it in the container for its mineral. The mobile robot plans its own collision-free paths on an occupancy grid and follows them while collecting an ore package. All perception, inverse kinematics, motion planning and path planning were written from first principles, without ready-made planners such as MoveIt~2 or Nav2. Because real ores are rarely one clean colour, ores are found by their shape in the depth image and classified by a vote over the colours of their whole face: it stays fully correct with half of each ore's coloured face covered by impurities, and recognises 70\% of held-out real mineral photographs against 11\% for tight colour thresholds. Ore positions are estimated to within 2--3~mm, inverse kinematics plans in 0.1--0.4~s, and planned paths are as short as a reference shortest path. Across repeated trials the manipulator sorted every ore into the correct container and the mobile robot completed every lap, with no collision and no safety stop.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -53,7 +53,7 @@ The project has two parts. The manipulator must find four ores on a conveyor, pi
 
 The contributions of this project are:
 \begin{itemize}
-\item a colour and depth pipeline that publishes each ore's 3D position with 1--3~mm error;
+\item a perception pipeline that finds ores by shape in the depth image and classifies them by a colour vote, robust to impure ores, with 1.7--2.7~mm position error;
 \item a pick-and-place pipeline built on damped least-squares inverse kinematics and resolved-rate control, with force-confirmed picks;
 \item an occupancy-grid planner whose paths match the reference shortest length, and a pure-pursuit follower that tracks them within 0.09~m;
 \item an evaluation of both pipelines over repeated randomised trials.
@@ -71,21 +71,61 @@ The system runs on Ubuntu~24.04 with ROS~2~\cite{macenski2022} Jazzy and Gazebo 
 The arm is a UR7e with an electromagnet on its flange and a RealSense D435i camera fixed to its base, looking down at a conveyor. Its servo caps each joint at 0.60~rad/s and triggers a latching protective stop on joint limits, singularities, collisions and overload. The mobile robot is a skid-steer base with a 2D lidar; a static occupancy grid of the arena is published once on \texttt{/map}.
 
 \section{Perception}
-Each ore is a $101.6\times101.6\times76.2$~mm block, black except for one coloured top face. The detector converts each colour frame to HSV and thresholds one range per mineral. The faces are far more saturated ($S>200$) than the orange terrain ($S<175$), which separates vanadinite from the ground. A blob is kept only if its area is plausible and it fills at least 60\% of its minimum-area rectangle, since faces are square.
+Each ore is a $101.6\times101.6\times76.2$~mm block, black except for a coloured top face. A first detector thresholded each mineral's colour tightly in HSV and kept blobs of plausible size and squareness. That works only while every ore shows one clean, saturated colour. Real ore is rarely so pure: veins of other minerals, dark or iron-stained matrix, dust and changing light all break a tight threshold. The final detector therefore separates \emph{where} an ore is from \emph{what} it is.
 
-Each pixel $(u,v)$ of a face is back-projected with its own aligned depth $z$ through the camera intrinsics,
+\subsection{Finding ores by shape}
+Every pixel $(u,v)$ of the aligned depth image is back-projected with its depth $z$ through the camera intrinsics,
 \begin{equation}
 \mathbf{p}_c = \left(\frac{(u-c_x)z}{f_x},\ \frac{(v-c_y)z}{f_y},\ z\right), \label{eq:backproj}
 \end{equation}
-and transformed into the arm's \texttt{base\_link} frame. The median of these points is the face centre, which is robust to noisy depth along the edges.
+and transformed into the arm's \texttt{base\_link} frame. An ore's top face is the only surface on the conveyor 66--86~mm above the belt, so the pixels in that height band, split into connected regions, are the candidate faces; the band also leaves a gap between ores standing close together, where their sides would join up. A region is kept only if a rectangle fitted to its points measures 80--130~mm a side. The face centre is the centre of that rectangle: the median of the points, used at first, was pulled 4--9~mm towards the camera by edge pixels whose depth mixes with the background. Against the simulator's ground truth the centres were 1.7--2.7~mm off.
 
-The number of ores of each mineral varies between trials, so the detector observes 20 frames before naming anything. Detections of one mineral closer than 5~cm are clustered as one ore, clusters seen in fewer than a third of the frames are discarded, and each mineral is numbered from 1, nearest the arm first. Only faces inside the conveyor's volume are accepted, so an ore already on the tool or in a container never moves a published position. Each ore is published as a tf2 frame at 10~Hz, at the median of its last 30 detections (Fig.~\ref{fig:detect}). Compared with the simulator's ground truth, the published positions were 1--3~mm from the true top-face centres.
+\subsection{Classifying by a colour vote}
+Each face is then classified by a vote over all of its pixels. For each mineral we count the share of the face whose hue falls in that mineral's range (blue 95--130, green 40--90, orange-red 0--20 and 170--180 on OpenCV's 0--180 scale), with saturation and value floors that exclude only grey, black and white matrix ($S\ge80$; $V\ge15$ for blue, since real azurite is very dark, and $V\ge40$ for green). Orange is held to higher limits ($S\ge140$, $V\ge100$) so that brown, iron-stained rock does not count as vanadinite. The mineral with the largest share wins if it covers at least 3\% of the face and twice the share of any other colour; otherwise the face is marked \emph{uncertain}. Impurities therefore only lower the winning share instead of breaking the detection. Over the 20 frames observed before naming, faces closer than 5~cm are one ore and its mineral is the majority vote; an ore that never gets a clear vote is reported rather than guessed. Each mineral is numbered from 1, nearest the arm first, and published as a tf2 frame at 10~Hz at the median of its last 30 positions (Fig.~\ref{fig:detect}).
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{figures/detection.png}}
 \caption{RealSense colour frame with four detected ores on the conveyor (right). The cargo rover's three containers are at the left.}
 \label{fig:detect}
 \end{figure}
+
+\subsection{Robustness to impure ores}
+The simulated ores are pure, so impurities were painted into a captured camera frame: random blotches of dark rock (40\%), brown matrix (30\%), white quartz (15\%) and veins of the other two minerals (15\%), covering 0--70\% of each ore's coloured area, under random brightness ($\times$0.6--1.3), colour cast ($\pm$8\% per channel) and sensor noise. Fig.~\ref{fig:impurity} shows 40 trials of four ores at each level. The first detector already misses 3\% of clean ores under dim light and finds under half at 20\% impurity. The voting detector classifies every ore correctly up to 50\% impurity and 84\% at 70\%, and never assigns a wrong mineral: what it cannot decide it marks uncertain, so no ore is dropped in the wrong container.
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\columnwidth]{figures/impurity.png}}
+\caption{Ores correctly found and classified against the share of each ore's coloured face covered by painted impurities, 160 ores per level.}
+\label{fig:impurity}
+\end{figure}
+
+\subsection{Real mineral photographs}
+Painted impurities are still synthetic, so both classifiers were also run on 180 real specimen photographs from Wikimedia Commons~\cite{commons}, 60 each of azurite, malachite and vanadinite, many of them intergrown with other minerals and matrix. A photograph has no depth, so the specimen is separated from its plain backdrop by its colour distance in Lab from the median border colour. The value floors and vote limits above were chosen by a grid search on photos 1--30 of each mineral, maximising correct minus twice wrong, and are reported on the 90 held-out photos (Table~\ref{tab:photos}).
+
+\begin{table}[htbp]
+\caption{Classification of 90 Held-Out Real Photographs}
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+ & \textbf{First} & \multicolumn{3}{c|}{\textbf{Voting detector}} \\
+\cline{3-5}
+\textbf{Mineral} & \textbf{detector} & \textbf{Correct} & \textbf{Wrong} & \textbf{Uncertain} \\
+\hline
+Azurite & 10\% & 37\% & 17\% & 47\% \\
+\hline
+Malachite & 7\% & 80\% & 7\% & 13\% \\
+\hline
+Vanadinite & 17\% & 93\% & 0\% & 7\% \\
+\hline
+\textbf{All} & \textbf{11\%} & \textbf{70\%} & \textbf{8\%} & \textbf{22\%} \\
+\hline
+\end{tabular}
+\label{tab:photos}
+\end{center}
+\end{table}
+
+The tight thresholds tuned to clean simulated faces recognise only 11\% of real specimens; the voting detector recognises 70\%. With the limits taken straight from the simulator it reached 57\% with 2\% wrong, so calibration trades a few more mistakes for many fewer uncertain specimens. Azurite remains the hardest: it is a very dark blue, and many azurite specimens are crusted with green malachite, which the two-to-one rule rightly refuses to call. A classifier trained on labelled images, such as a small convolutional network, is the natural next step once real ore samples are available.
+
+
 
 \section{Manipulation}
 \subsection{Workspace and containers}
@@ -152,6 +192,10 @@ Arm 1 & 4/4 ores detected, picked and dropped in the correct container; 0 safety
 \hline
 Arm 2 & Different ore mix, one ore 0.83~m from the base: 4/4 sorted correctly in 167~s; 0 safety stops \\
 \hline
+Arm 3 & Voting detector (simulator limits): 4/4 classified in 20/20 frames, sorted correctly; 0 safety stops \\
+\hline
+Arm 4 & Voting detector (calibrated limits), two azurite ores: 4/4 sorted correctly in 180~s; 0 safety stops \\
+\hline
 Robot 1 & First planner: 14.74~m lap vs.\ 14.46~m reference, $\eta=0.98$ \\
 \hline
 Robot 2 & Final planner: 14.55~m vs.\ 14.58~m, $\eta=1.00$ \\
@@ -204,6 +248,7 @@ We thank e-Yantra, IIT Bombay, for the Strata Cobot simulation environment and i
 \bibitem{coulter1992} R. C. Coulter, ``Implementation of the pure pursuit path tracking algorithm,'' Carnegie Mellon Univ., Pittsburgh, PA, USA, Tech. Rep. CMU-RI-TR-92-01, 1992.
 \bibitem{wampler1986} C. W. Wampler, ``Manipulator inverse kinematic solutions based on vector formulations and damped least-squares methods,'' IEEE Trans. Syst., Man, Cybern., vol. 16, no. 1, pp. 93--101, 1986.
 \bibitem{whitney1969} D. E. Whitney, ``Resolved motion rate control of manipulators and human prostheses,'' IEEE Trans. Man-Mach. Syst., vol. 10, no. 2, pp. 47--53, 1969.
+\bibitem{commons} Wikimedia Commons, ``Category:Azurite'', ``Category:Malachite'' and ``Category:Vanadinite,'' accessed Oct.\ 2026. [Online]. Available: \url{https://commons.wikimedia.org/wiki/Category:Minerals}
 \bibitem{macenski2022} S. Macenski, T. Foote, B. Gerkey, C. Lalancette, and W. Woodall, ``Robot Operating System 2: Design, architecture, and uses in the wild,'' Sci. Robot., vol. 7, no. 66, 2022.
 \end{thebibliography}
 
