@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strata Cobot · Mission control</title>
+<style>
+  :root {
+    --bg: #15181b; --panel: #1e2226; --panel-2: #262b30; --line: #343a40;
+    --text: #eef0f2; --muted: #9aa3ab; --accent: #e0662c; --accent-soft: rgba(224, 102, 44, 0.16);
+    --good: #4cb86b; --warn: #e3b341; --bad: #e5534b;
+    --azurite: #3d8fe6; --malachite: #3fbf5f; --vanadinite: #f2772a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif; }
+  header { display: flex; align-items: center; gap: 24px; padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .brand h1 { margin: 0; font-size: 20px; letter-spacing: 0.06em; }
+  .brand h1 span { color: var(--accent); }
+  .brand p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+  button { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 9px 16px; border-radius: 8px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.stop { color: var(--bad); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  label.check { color: var(--muted); font-size: 13.5px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .status { display: flex; align-items: center; gap: 12px; padding: 10px 24px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .pill { font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+  .pill.starting, .pill.stopping { background: rgba(227, 179, 65, 0.18); color: var(--warn); }
+  .pill.running { background: var(--accent-soft); color: var(--accent); }
+  .pill.done { background: rgba(76, 184, 107, 0.18); color: var(--good); }
+  .pill.error { background: rgba(229, 83, 75, 0.18); color: var(--bad); }
+  #message { color: var(--muted); }
+  #elapsed { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .tabs { display: flex; gap: 4px; padding: 14px 24px 0; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 8px 14px; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { padding: 16px 24px 24px; }
+  .view { display: none; grid-template-columns: minmax(0, 1.55fr) minmax(300px, 1fr); gap: 16px; }
+  .view.active { display: grid; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .feed { width: 100%; border-radius: 8px; display: block; background: #000; aspect-ratio: 4 / 3; object-fit: contain; }
+  .big { font-size: 40px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .big small { font-size: 18px; color: var(--muted); font-weight: 600; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.4s; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .step-label { font-size: 22px; font-weight: 700; }
+  .muted { color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: var(--panel-2); font-size: 13px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  .safety { font-weight: 700; }
+  .safety.ok { color: var(--good); } .safety.warn { color: var(--warn); } .safety.bad { color: var(--bad); }
+  canvas { width: 100%; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 6px 6px; }
+  td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: middle; }
+  .votes { display: flex; flex-direction: column; gap: 3px; min-width: 110px; }
+  .vote { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+  .vote b { display: block; height: 6px; border-radius: 3px; min-width: 1px; }
+  .state { font-size: 12.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: var(--panel-2); color: var(--muted); }
+  .state.active { background: var(--accent-soft); color: var(--accent); }
+  .state.sorted { background: rgba(76, 184, 107, 0.18); color: var(--good); }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .steps li { display: flex; gap: 12px; align-items: center; }
+  .steps .n { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; background: var(--panel-2); color: var(--muted); flex: none; }
+  .steps li.active .n { background: var(--accent); color: #fff; }
+  .steps li.done .n { background: var(--good); color: #fff; }
+  .steps li .t { font-weight: 600; }
+  .steps li .s { font-size: 12.5px; color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stat .v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 18px; height: 3px; display: inline-block; border-radius: 2px; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+  #log { margin: 10px 0 0; max-height: 220px; overflow: auto; background: #0e1012; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; color: #c7ccd1; white-space: pre-wrap; }
+  @media (max-width: 900px) { .view.active { grid-template-columns: 1fr; } header { gap: 12px; } .controls { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>STRATA <span>COBOT</span> · Mission control</h1>
+    <p>C Saihardhik Reddy · R Gagan Chowdary · K Charan Saatvikh Reddy · Amrita Vishwa Vidyapeetham</p>
+  </div>
+  <div class="controls">
+    <button class="primary" id="run-sorting">▶ Run ore sorting</button>
+    <button class="primary" id="run-lap">▶ Run mobile robot lap</button>
+    <button class="stop" id="stop">■ Stop</button>
+    <label class="check"><input type="checkbox" id="gazebo"> Also open the Gazebo 3D window</label>
+  </div>
+</header>
+<div class="status">
+  <span class="pill" id="phase">idle</span>
+  <span id="message">Connecting...</span>
+  <span id="elapsed"></span>
+</div>
+<nav class="tabs">
+  <button class="tab active" data-view="sorting">Ore sorting (arm)</button>
+  <button class="tab" data-view="lap">Mobile robot lap</button>
+</nav>
+<main>
+  <section class="view active" id="view-sorting">
+    <div class="card">
+      <h2>Arm camera · live, with detected ores</h2>
+      <img class="feed" id="camera" alt="Live camera with detected ores outlined">
+      <div class="legend">
+        <span><span class="dot" style="background:var(--azurite)"></span>azurite</span>
+        <span><span class="dot" style="background:var(--malachite)"></span>malachite</span>
+        <span><span class="dot" style="background:var(--vanadinite)"></span>vanadinite</span>
+        <span><span class="dot" style="background:#c8c8c8"></span>uncertain</span>
+        <span>· the % is the share of the face in the winning colour</span>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <h2>Ores sorted</h2>
+        <div class="big" id="sorted-count">0 <small>/ 0</small></div>
+        <div class="bar"><i id="sorted-bar"></i></div>
+      </div>
+      <div class="card">
+        <h2>What the arm is doing</h2>
+        <div class="row"><div class="step-label" id="arm-step">Waiting</div><span class="chip" id="arm-ore" hidden></span></div>
+        <div class="row" style="margin-top:8px"><span class="muted">Safety</span><span class="safety" id="arm-safety">—</span></div>
+      </div>
+      <div class="card">
+        <div class="row"><h2 style="margin:0">Magnet force</h2><span id="force-now" class="muted">—</span></div>
+        <canvas id="force" height="120"></canvas>
+        <div class="legend"><span><i style="background:var(--good)"></i>1.47 N = one ore held</span><span><i style="background:var(--muted)"></i>0.8 N pick check</span></div>
+      </div>
+      <div class="card">
+        <h2>Ores and their colour vote</h2>
+        <table><thead><tr><th>Ore</th><th>Vote</th><th>Status</th></tr></thead><tbody id="ores"><tr><td colspan="3" class="muted">No ores named yet.</td></tr></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-lap">
+    <div class="card">
+      <h2>Arena map · live</h2>
+      <canvas id="map" height="560"></canvas>
+      <div class="legend">
+        <span><i style="background:#e0662c"></i>leg 1 path</span><span><i style="background:#3d8fe6"></i>leg 2 path</span><span><i style="background:#3fbf5f"></i>leg 3 path</span>
+        <span><i style="background:#9aa3ab"></i>driven trail (dotted)</span><span>dark shapes = rocks</span>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <h2>Lap progress</h2>
+        <ol class="steps" id="lap-steps"></ol>
+      </div>
+      <div class="card">
+        <h2>Mobile robot</h2>
+        <div class="stats">
+          <div class="stat"><div class="v" id="speed">—</div><div class="l">speed, m/s</div></div>
+          <div class="stat"><div class="v" id="driven">—</div><div class="l">driven, m</div></div>
+          <div class="stat"><div class="v" id="planned">—</div><div class="l">planned, m</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <details open>
+    <summary>Log</summary>
+    <pre id="log">The log of the simulator and the robot nodes appears here.</pre>
+  </details>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { azurite_ore: '#3d8fe6', malachite_ore: '#3fbf5f', vanadinite_ore: '#f2772a' };
+const LEG_COLORS = ['#e0662c', '#3d8fe6', '#3fbf5f'];
+const ARM_STEPS = {
+  init: 'Starting up', wait_ores: 'Waiting for ores', next: 'Choosing the next ore', plan_pick: 'Planning the pick',
+  to_ore: 'Moving to the ore', align: 'Lining up above it', descend: 'Descending, magnet on', grip: 'Gripping',
+  lift: 'Lifting', check: 'Checking the hold', plan_drop: 'Planning the drop', to_bin: 'Carrying to its container',
+  release: 'Releasing', recover: 'Recovering from a safety stop', park: 'All done', done: 'All done',
+};
+const POSES = [['Home', 0, 0], ['Ore drop', 6.0, 1.9], ['Arm pose', 0, 1.9]];
+let state = null, view = 'sorting', mapImg = null, mapKey = null, lastMode = null;
+const voteCache = {};   // ore name -> last colour shares seen
+
+// ---------- controls ----------
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  return r.json();
+}
+$('run-sorting').onclick = async () => { show('sorting'); const r = await post('/api/run', { mode: 'sorting', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
+$('run-lap').onclick = async () => { show('lap'); const r = await post('/api/run', { mode: 'lap', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
+$('stop').onclick = () => post('/api/stop');
+document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => show(t.dataset.view)));
+function show(v) {
+  view = v;
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === v));
+  $('view-sorting').classList.toggle('active', v === 'sorting');
+  $('view-lap').classList.toggle('active', v === 'lap');
+  if (v === 'sorting' && !$('camera').src) $('camera').src = '/camera.mjpg';
+  draw();
+}
+$('camera').src = '/camera.mjpg';
+
+// ---------- live data ----------
+const es = new EventSource('/events');
+es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
+es.onerror = () => { $('message').textContent = 'Lost the connection to the dashboard app. Is it still running?'; };
+
+function render() {
+  const run = state.run;
+  const busy = ['starting', 'running', 'stopping'].includes(run.phase);
+  $('phase').textContent = run.phase; $('phase').className = 'pill ' + run.phase;
+  $('message').textContent = run.message;
+  $('elapsed').textContent = run.elapsed ? `${Math.floor(run.elapsed / 60)}:${String(Math.floor(run.elapsed % 60)).padStart(2, '0')}` : '';
+  $('run-sorting').disabled = busy; $('run-lap').disabled = busy; $('stop').disabled = !busy && run.phase !== 'done' && run.phase !== 'error';
+  if (run.mode && run.mode !== lastMode) { lastMode = run.mode; show(run.mode); }
+  const log = $('log'); const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = run.log.length ? run.log.join('\n') : 'The log of the simulator and the robot nodes appears here.';
+  if (atEnd) log.scrollTop = log.scrollHeight;
+  renderSorting(); draw();
+}
+
+// ---------- ore sorting ----------
+function renderSorting() {
+  const per = state.perception || {}, sorter = state.sorter || {};
+  const names = Object.keys(per.ores || {}).sort();
+  const sorted = sorter.sorted || [];
+  $('sorted-count').innerHTML = `${sorted.length} <small>/ ${names.length || '—'}</small>`;
+  $('sorted-bar').style.width = names.length ? `${(100 * sorted.length) / names.length}%` : '0';
+  $('arm-step').textContent = ARM_STEPS[sorter.state] || (state.run.phase === 'idle' ? 'Idle' : 'Waiting');
+  const ore = $('arm-ore');
+  if (sorter.current && !['park', 'done'].includes(sorter.state)) {
+    const m = sorter.current.replace(/_\d+$/, '');
+    ore.hidden = false; ore.innerHTML = `<span class="dot" style="background:${COLORS[m] || '#ccc'}"></span>${sorter.current.replace('_ore', '')}`;
+  } else ore.hidden = true;
+  const code = state.arm_status;
+  const safe = $('arm-safety');
+  if (code == null) { safe.textContent = '—'; safe.className = 'safety'; }
+  else if (code >= 20 && code < 30) { safe.textContent = `Safety stop (code ${code})`; safe.className = 'safety bad'; }
+  else if (code >= 10 && code < 20) { safe.textContent = `Warning (code ${code})`; safe.className = 'safety warn'; }
+  else if (code === 0) { safe.textContent = 'OK'; safe.className = 'safety ok'; }
+  else { safe.textContent = `Code ${code}`; safe.className = 'safety warn'; }
+  const f = state.force; const now = f.length ? f[f.length - 1] : null;
+  const holding = ['lift', 'check', 'plan_drop', 'to_bin'].includes(sorter.state) && now > 0.8;
+  $('force-now').textContent = now == null ? '—' : `${now.toFixed(2)} N${holding ? ' · ore held' : sorter.state === 'descend' || sorter.state === 'grip' ? ' · pressing on the ore' : ''}`;
+  drawForce(f);
+
+  // Match each face seen now to the nearest named ore, to keep that ore's latest vote.
+  for (const face of per.faces || []) {
+    let best = null, bd = 0.05;
+    for (const n of names) {
+      const p = per.ores[n]; const d = Math.hypot(p[0] - face.centre[0], p[1] - face.centre[1]);
+      if (d < bd) { bd = d; best = n; }
+    }
+    // Freeze an ore's vote once the arm starts on it: from then on the arm hides its face.
+    const busy = best && (best === sorter.current || sorted.includes(best));
+    if (best && !busy && face.mineral && best.startsWith(face.mineral)) voteCache[best] = face.shares;
+  }
+  const rows = names.map((n) => {
+    const m = n.replace(/_\d+$/, ''); const sh = voteCache[n] || {};
+    const status = sorted.includes(n) ? ['sorted', 'Sorted'] : sorter.current === n ? ['active', 'Picking'] : ['', 'Waiting'];
+    const votes = Object.keys(COLORS).map((k) => {
+      const v = sh[k] || 0;
+      return `<div class="vote"><b style="width:${Math.max(1, v * 140)}px;background:${COLORS[k]}"></b>${Math.round(v * 100)}%</div>`;
+    }).join('');
+    return `<tr><td><span class="chip"><span class="dot" style="background:${COLORS[m]}"></span>${n.replace('_ore', '')}</span></td>
+      <td><div class="votes">${votes}</div></td><td><span class="state ${status[0]}">${status[1]}</span></td></tr>`;
+  });
+  $('ores').innerHTML = rows.length ? rows.join('') : `<tr><td colspan="3" class="muted">${per.phase === 'naming' ? `Watching the conveyor (${per.frames_seen}/20 frames)...` : 'No ores named yet.'}</td></tr>`;
+}
+
+function drawForce(f) {
+  const c = $('force'), ctx = c.getContext('2d');
+  const w = (c.width = c.clientWidth * devicePixelRatio), h = (c.height = 120 * devicePixelRatio);
+  ctx.clearRect(0, 0, w, h);
+  const y = (v) => h - (Math.min(v, 4) / 4) * (h - 8) - 4;
+  ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]); ctx.lineWidth = devicePixelRatio;
+  [[1.47, '#4cb86b'], [0.8, '#9aa3ab']].forEach(([v, col]) => { ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(0, y(v)); ctx.lineTo(w, y(v)); ctx.stroke(); });
+  ctx.setLineDash([]);
+  if (!f.length) return;
+  ctx.strokeStyle = '#e0662c'; ctx.lineWidth = 2 * devicePixelRatio; ctx.beginPath();
+  f.forEach((v, i) => { const x = (i / 199) * w; i ? ctx.lineTo(x, y(v)) : ctx.moveTo(x, y(v)); });
+  ctx.stroke();
+}
+
+// ---------- mobile robot lap ----------
+function draw() {
+  if (!state || view !== 'lap') return;
+  renderLapPanel();
+  const c = $('map'), ctx = c.getContext('2d'), info = state.map;
+  const w = (c.width = c.clientWidth * devicePixelRatio);
+  if (!info) {
+    c.height = 300 * devicePixelRatio; ctx.fillStyle = '#9aa3ab'; ctx.font = `${16 * devicePixelRatio}px system-ui`;
+    ctx.fillText('The map appears once the mobile robot world is running.', 20 * devicePixelRatio, 40 * devicePixelRatio);
+    return;
+  }
+  const key = JSON.stringify(info);
+  if (key !== mapKey) { mapKey = key; mapImg = new Image(); mapImg.src = '/map.png?' + Date.now(); mapImg.onload = draw; }
+  const s = w / info.w; const h = (c.height = info.h * s);
+  const X = (x) => ((x - info.origin[0]) / info.res) * s, Y = (y) => h - ((y - info.origin[1]) / info.res) * s;
+  if (mapImg && mapImg.complete) ctx.drawImage(mapImg, 0, 0, w, h);
+  const px = devicePixelRatio;
+  state.paths.forEach((p, i) => {
+    ctx.strokeStyle = LEG_COLORS[i % 3]; ctx.lineWidth = 3 * px; ctx.beginPath();
+    p.forEach(([x, y], j) => (j ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.stroke();
+  });
+  ctx.strokeStyle = '#2b2f33'; ctx.lineWidth = 2.5 * px; ctx.setLineDash([2 * px, 4 * px]); ctx.beginPath();
+  state.trail.forEach(([x, y], j) => (j ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = `600 ${13 * px}px system-ui`;
+  POSES.forEach(([name, x, y]) => {
+    ctx.fillStyle = '#1e2226'; ctx.fillRect(X(x) - 5 * px, Y(y) - 5 * px, 10 * px, 10 * px);
+    ctx.fillText(name, X(x) + 9 * px, Y(y) - 8 * px);
+  });
+  const o = state.odom;
+  if (o) {   // the robot, to scale: 0.62 x 0.49 m
+    ctx.save(); ctx.translate(X(o.x), Y(o.y)); ctx.rotate(-o.yaw);
+    const L = (0.62 / info.res) * s, B = (0.49 / info.res) * s;
+    ctx.fillStyle = 'rgba(224, 102, 44, 0.9)'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * px;
+    ctx.fillRect(-L / 2, -B / 2, L, B); ctx.strokeRect(-L / 2, -B / 2, L, B);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(L / 2, 0); ctx.lineTo(L / 2 - B * 0.45, -B * 0.28); ctx.lineTo(L / 2 - B * 0.45, B * 0.28); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function renderLapPanel() {
+  const pl = state.planning || {}, o = state.odom;
+  const step = pl.step || 0, st = pl.state, finished = st === 'done';
+  const items = [
+    ['Leg 1: home to the ore drop', 1], ['Collect the ore package', 'pkg'], ['Leg 2: ore drop to the arm pose', 2], ['Leg 3: back home', 3],
+  ];
+  $('lap-steps').innerHTML = items.map(([t, k], i) => {
+    let cls = '', sub = 'waiting';
+    if (k === 'pkg') {
+      if (pl.package) { cls = 'done'; sub = 'landed on the robot'; } else if (step === 1 && st === 'package') { cls = 'active'; sub = 'requesting...'; }
+    } else if (finished || step > k || (step === k && st === 'package')) { cls = 'done'; sub = pl.path_lengths && pl.path_lengths[k - 1] != null ? `path ${pl.path_lengths[k - 1].toFixed(2)} m` : 'done'; }
+    else if (step === k && st) { cls = 'active'; sub = st === 'plan' ? 'planning...' : st === 'drive' ? `driving${pl.path_lengths && pl.path_lengths[k - 1] ? ` · path ${pl.path_lengths[k - 1].toFixed(2)} m` : ''}` : st; }
+    return `<li class="${cls}"><span class="n">${cls === 'done' ? '✓' : k === 'pkg' ? '◆' : k}</span><div><div class="t">${t}</div><div class="s">${sub}</div></div></li>`;
+  }).join('');
+  $('speed').textContent = o ? o.v.toFixed(2) : '—';
+  let d = 0; const tr = state.trail; for (let i = 1; i < tr.length; i++) d += Math.hypot(tr[i][0] - tr[i - 1][0], tr[i][1] - tr[i - 1][1]);
+  $('driven').textContent = tr.length ? d.toFixed(1) : '—';
+  $('planned').textContent = pl.path_lengths && pl.path_lengths.length ? pl.path_lengths.reduce((a, b) => a + b, 0).toFixed(1) : '—';
+}
+window.addEventListener('resize', draw);
+</script>
+</body>
+</html>
