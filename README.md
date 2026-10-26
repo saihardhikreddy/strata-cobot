@@ -15,7 +15,7 @@ Each trial used a freshly launched world with randomised ores or rocks.
 | Subsystem | Result |
 | --- | --- |
 | Ore perception | Every ore located within 2–3 mm of its true position; correct up to 50% impurity, 70% of real held-out mineral photos (11% before) |
-| Arm manipulation | 8 of 8 ores sorted into the correct container over two trials, no safety stops |
+| Arm manipulation | 16 of 16 ores sorted into the correct container over four trials, no safety stops |
 | Path planning | Paths as short as the reference shortest path (efficiency up to 1.00) |
 | Path following | Within 0.09 m of every path, no collisions |
 
