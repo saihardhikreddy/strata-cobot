@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+build/
+install/
+log/
+node_modules/
+*.aux
+*.log
+!results/**/*.log
+*.synctex.gz
