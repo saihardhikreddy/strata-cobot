@@ -167,20 +167,39 @@ pres.addSection({ title: 'The manipulator' });
 // 5. Perception
 {
   const s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'The manipulator' });
-  s.addText('Perception lands within 3 mm of every ore', { placeholder: 'title' });
+  s.addText('Find each ore by shape, name it by a colour vote', { placeholder: 'title' });
   s.addImage({ path: IMG('detection.png'), x: 0.6, y: 1.5, w: 6.4, h: 4.8, objectName: 'camera-detections',
     altText: 'Camera frame with azurite, malachite and two vanadinite ores outlined on the conveyor' });
-  stat(s, 7.5, 1.5, 2.5, '1-3 mm', 'error vs. Gazebo ground truth', C.accent1, 'stat-error');
-  stat(s, 10.2, 1.5, 2.5, '50 mm', 'scoring tolerance', C.accent5, 'stat-tolerance');
+  stat(s, 7.5, 1.5, 2.5, '2-3 mm', 'position error vs. ground truth', C.accent1, 'stat-error');
+  stat(s, 10.2, 1.5, 2.5, '10 mm', 'about what the magnet tolerates', C.accent5, 'stat-tolerance');
   const pts = [
-    'HSV threshold per mineral: faces are far more saturated than the orange terrain',
-    'Every face pixel back-projected with its own depth, then the median point',
-    'Ore counts vary by launch: 20 frames are clustered before ores are named',
-    'Only faces on the conveyor count, so a picked ore never moves its frame',
+    'Where: an ore\'s top face is the only surface 66-86 mm above the belt in the depth image',
+    'Centre of a rectangle fitted to that face, checked against the 101.6 mm size',
+    'What: the share of the face in each mineral\'s colour; the winner needs 2x the next',
+    'Majority vote over 20 frames; no clear winner = "uncertain", never a guess',
   ];
   txt(s, pts.map((p, i) => ({ text: p, options: { bullet: true, breakLine: i < pts.length - 1 } })),
     { x: 7.5, y: 3.5, w: 5.2, h: 2.9, fontSize: 15, paraSpaceAfter: 8 });
-  s.addNotes('The median of back-projected pixels is robust to noisy depth at the face edges. Because the mix of minerals changes every launch, the node watches 20 frames, clusters detections within 5 cm, and numbers each kind from 1. Measured against Gazebo\'s true positions, the error was 1 to 3 mm, against a 50 mm scoring tolerance and about 10 mm the magnet needs.');
+  s.addNotes('Our first detector found ores by tight colour thresholds. Now we separate where an ore is from what it is. Where comes from the depth camera: every ore is a block standing 76 mm above the belt, so its top face is found whatever its colour. What comes from a vote: we count how much of the face shows each mineral\'s colour. Fitting a rectangle to the face, instead of taking a median, keeps the position within 2 to 3 mm.');
+}
+
+// 5b. Impure ores
+{
+  const s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'The manipulator' });
+  s.addText('Real ores are rarely one colour, so we vote', { placeholder: 'title' });
+  s.addImage({ path: IMG('impurity_robustness.png'), x: 0.5, y: 1.45, w: 7.2, h: 4.11, objectName: 'impurity-chart',
+    altText: 'Accuracy against impurity: the voting detector stays at 100% up to 50% impurity while tight thresholds fall to 48% at 20%' });
+  txt(s, 'Impurities painted into a real camera frame: dark rock, brown matrix, quartz and veins of other minerals, under varied lighting. 160 ores per level.',
+    { x: 0.5, y: 5.7, w: 7.2, h: 0.7, fontSize: 13, color: C.text2 });
+  txt(s, '180 real mineral photos', { x: 8.1, y: 1.5, w: 4.6, h: 0.4, fontSize: 16, bold: true });
+  const head = ['Held-out photos', 'Tight', 'Vote'].map((t) => ({ text: t, options: { bold: true, color: HEX.lt1, fill: { color: HEX.dk1 } } }));
+  const rows = [['Azurite', '10%', '37%'], ['Malachite', '7%', '80%'], ['Vanadinite', '17%', '93%'], ['All', '11%', '70%']]
+    .map((r, i) => r.map((c, j) => ({ text: c, options: { bold: i === 3, color: j === 2 ? HEX.accent1 : HEX.dk1 } })));
+  s.addTable([head, ...rows], { x: 8.1, y: 2.0, w: 4.6, colW: [2.2, 1.2, 1.2], fontSize: 15, fontFace: 'Calibri',
+    border: { type: 'solid', pt: 0.75, color: 'D9D4CF' }, rowH: 0.5, valign: 'middle', margin: [0.05, 0.12, 0.05, 0.12] });
+  txt(s, 'Museum photos from Wikimedia Commons. Limits calibrated on 90, tested on 90 others. Azurite is hardest: very dark, and often crusted with green malachite.',
+    { x: 8.1, y: 4.75, w: 4.6, h: 1.2, fontSize: 13, color: C.text2 });
+  s.addNotes('Our lecturer pointed out that real ores are not pure colours. We tested that two ways. First, we painted impurities into a real camera frame: the old tight thresholds fall below half at 20 percent impurity, while the vote stays perfect up to 50 percent and never picks the wrong mineral. Second, we ran both on 180 real mineral photographs: tight thresholds recognise 11 percent, the vote 70 percent on photos it was not tuned on. Azurite is hardest, because real azurite is very dark and usually mixed with malachite. A trained classifier is the next step once real samples are available.');
 }
 
 // 6. Containers
@@ -361,7 +380,7 @@ pres.addSection({ title: 'Results' });
     txt(s, d, { x: 1.45, y: 2.02 + i * 1.05, w: 5.6, h: 0.75, fontSize: 20, color: C.background1, valign: 'top' });
   });
   txt(s, 'Next', { x: 7.4, y: 1.95, w: 5.2, h: 0.5, fontSize: 22, bold: true, color: C.accent4 });
-  const next = ['Hand ore from the eBot to the arm', 'Re-plan around rocks the map misses', 'Faster sorting by blending moves', 'Move to physical robots'];
+  const next = ['Hand ore from the eBot to the arm', 'Re-plan around rocks the map misses', 'Train a classifier on real ore samples', 'Move to physical robots'];
   txt(s, next.map((n, i) => ({ text: n, options: { bullet: true, breakLine: i < next.length - 1 } })),
     { x: 7.4, y: 2.6, w: 5.2, h: 2.8, fontSize: 18, color: C.background2, paraSpaceAfter: 10 });
   txt(s, 'Thank you  ·  Questions?', { x: 0.7, y: 6.2, w: 11.9, h: 0.6, fontSize: 20, bold: true, color: C.background1 });
