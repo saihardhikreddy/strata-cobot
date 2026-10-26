@@ -14,7 +14,7 @@ Each trial used a freshly launched world with randomised ores or rocks.
 
 | Subsystem | Result |
 | --- | --- |
-| Ore perception | Every ore located within 1–3 mm of its true position |
+| Ore perception | Every ore located within 2–3 mm of its true position; correct up to 50% impurity, 70% of real held-out mineral photos (11% before) |
 | Arm manipulation | 8 of 8 ores sorted into the correct container over two trials, no safety stops |
 | Path planning | Paths as short as the reference shortest path (efficiency up to 1.00) |
 | Path following | Within 0.09 m of every path, no collisions |
@@ -23,7 +23,7 @@ Each trial used a freshly launched world with randomised ores or rocks.
 
 | Node | Role |
 | --- | --- |
-| `ore_perception.py` | HSV detection of each ore's coloured face, depth back-projection, median position per ore, published as tf2 frames |
+| `ore_perception.py` | Finds each ore by shape in the depth image, classifies its mineral by a vote over the colours of its whole face (real ores are rarely one colour), publishes tf2 frames |
 | `arm_manipulation.py` | Damped least-squares IK with the tool vertical, collision-checked joint-space routes, straight vertical descents by resolved-rate control, force-confirmed magnet picks |
 | `path_planning.py` | Clearance map from `/map`, A* on a 5 cm grid, shortcutting and corner tightening, clearance chosen so the path matches the shortest length |
 | `path_following.py` | Pure-pursuit path following, turn to the final heading, stop on the pose |
@@ -33,6 +33,28 @@ Each trial used a freshly launched world with randomised ores or rocks.
 ![Planned paths for the mobile robot](docs/images/paths.png)
 
 The full write-up is the IEEE-format report, [`docs/Strata_Cobot_IEEE_Report.pdf`](docs/Strata_Cobot_IEEE_Report.pdf) (LaTeX source in [`report/`](report/)). The slides are [`docs/Strata_Cobot_Presentation.pptx`](docs/Strata_Cobot_Presentation.pptx).
+
+## Impure ores
+
+Real ores are rarely one clean colour: veins of other minerals, dark or brown matrix, dust and lighting all get in the way. The perception node therefore separates *where* an ore is (its height above the belt in the depth image) from *what* it is (the share of its face in each mineral's colour, with "uncertain" when no colour clearly wins).
+
+![Accuracy against impurity](docs/images/impurity_robustness.png)
+
+| Held-out real photos (Wikimedia Commons) | First detector | Colour vote |
+| --- | --- | --- |
+| Azurite | 10% | 37% |
+| Malachite | 7% | 80% |
+| Vanadinite | 17% | 93% |
+| **All 90** | **11%** | **70%** |
+
+Reproduce with the scripts in [`experiments/`](experiments/) (ROS 2 sourced):
+
+```bash
+python3 experiments/impurity_robustness.py     # painted impurities on a captured camera frame
+python3 experiments/fetch_commons_photos.py    # 180 real photos + licence manifest
+python3 experiments/calibrate_colour.py        # tune on 90 photos, test on the other 90
+python3 experiments/real_mineral_photos.py     # first detector vs colour vote
+```
 
 ## Running it
 
@@ -64,6 +86,7 @@ Requirements: Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, and the e-Yantra Strat
 
 ```
 src/strata_cobot/   ROS 2 package with the four nodes
+experiments/        perception experiments: impurities, real mineral photos, calibration
 docs/               report PDF, slides (and the script that builds them), figures
 report/             IEEE LaTeX source of the report (IEEEtran)
 ```
