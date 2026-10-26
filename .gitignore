@@ -8,3 +8,6 @@ node_modules/
 *.log
 !results/**/*.log
 *.synctex.gz
+
+# Real mineral photos are fetched by experiments/fetch_commons_photos.py, not redistributed
+experiments/mineral_photos/
