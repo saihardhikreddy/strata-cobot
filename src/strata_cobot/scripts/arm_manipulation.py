@@ -20,7 +20,7 @@ Arm manipulation: picks each ore with the magnet and drops it in the container f
 #                               find_ores, refresh_target, go, elapsed,
 #                               process_sorting, step
 # Nodes:		    ore_sorter_node
-#			        Publishing Topics  - [ /delta_joint_cmds ]
+#			        Publishing Topics  - [ /delta_joint_cmds, /ore_sorter/status ]
 #                   Subscribing Topics - [ /robot_description, /tcp_pose_raw, /joint_states,
 #                                          /arm_status, /ur7e/end_effector/force_magnitude,
 #                                          /tf, /tf_static ]
@@ -31,6 +31,7 @@ Arm manipulation: picks each ore with the magnet and drops it in the container f
 ################### IMPORT MODULES #######################
 
 import sys
+import json
 import math
 import re
 import struct
@@ -519,6 +520,7 @@ class ore_sorter(Node):
         ############ Topic PUBLISHERS ############
 
         self.joint_pub = self.create_publisher(JointJog, '/delta_joint_cmds', 10)
+        self.status_pub = self.create_publisher(String, '/ore_sorter/status', 10)      # progress, as JSON, for the dashboard
 
         ############ Topic SUBSCRIPTIONS ############
 
@@ -564,6 +566,7 @@ class ore_sorter(Node):
         self.magnet_pending = False
         self.unlock_pending = False
         self.sorted = []
+        self.cycles = 0
 
         self.joint_mode = self.switch_controller('joint_controller')
 
@@ -820,6 +823,13 @@ class ore_sorter(Node):
         except Exception as e:
             self.get_logger().error(f'Control error: {e}')
             self.publish_joint_velocity(np.zeros(6))
+        self.cycles += 1
+        if self.cycles % 10 == 0:                                   # 5 Hz is plenty for people
+            msg = String()
+            msg.data = json.dumps({'state': self.state, 'current': self.current[0] if self.current else None,
+                                   'sorted': self.sorted, 'remaining': [o[0] for o in (self.ores or [])],
+                                   'tries': self.tries, 'force': round(self.force, 3), 'arm_status': self.arm_status})
+            self.status_pub.publish(msg)
 
 
     def step(self):
