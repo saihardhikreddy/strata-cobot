@@ -56,6 +56,21 @@ python3 experiments/calibrate_colour.py        # tune on 90 photos, test on the 
 python3 experiments/real_mineral_photos.py     # first detector vs colour vote
 ```
 
+## Dashboard: one-click runs, live view
+
+`dashboard/` is a small web app that runs either mission at the press of a button and mirrors it live: the arm camera with each detected ore outlined and its colour vote, what the arm is doing, the magnet force and the sorted count; or the arena map with the planned paths, the mobile robot's position and the lap's progress.
+
+```bash
+dashboard/run_dashboard.sh          # opens http://localhost:8765 in the browser
+dashboard/install_launcher.sh       # once: adds "Strata Cobot" to the Ubuntu app menu
+```
+
+![Dashboard during ore sorting](docs/images/dashboard_sorting.jpg)
+
+![Dashboard during the mobile robot lap](docs/images/dashboard_lap.jpg)
+
+It needs only ROS 2 Jazzy and the simulation workspace (`~/ros2_ws`, or set `ROS2_WS`), and runs the nodes straight from `src/strata_cobot/scripts`, so no build is needed for it. Tick *Also open the Gazebo 3D window* to watch the simulator itself as well.
+
 ## Running it
 
 Requirements: Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, and the e-Yantra Strata Cobot simulation packages (`eyantra_kepler_colony`, `ur_description`, `ebot_description`) in `~/ros2_ws/src`.
@@ -86,6 +101,7 @@ Requirements: Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, and the e-Yantra Strat
 
 ```
 src/strata_cobot/   ROS 2 package with the four nodes
+dashboard/          web dashboard: one-click runs and a live view of both robots
 experiments/        perception experiments: impurities, real mineral photos, calibration
 docs/               report PDF, slides (and the script that builds them), figures
 report/             IEEE LaTeX source of the report (IEEEtran)
