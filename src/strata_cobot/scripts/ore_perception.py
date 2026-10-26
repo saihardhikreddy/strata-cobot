@@ -64,15 +64,17 @@ min_face_px = 80
 # The colour of each mineral, as HSV ranges (OpenCV: H 0-180, S and V 0-255). Hue carries
 # the mineral; saturation and value only have to rule out grey, black and white matrix.
 # Orange is held to a brighter, more saturated range so that brown rock does not count.
+# The value floors and the vote's limits below were calibrated on 90 real museum photos
+# (experiments/calibrate_colour.py): real azurite is a very dark blue, hence its low floor.
 mineral_colours = {
-    'azurite_ore':    [((95, 80, 40), (130, 255, 255))],                              # blue
+    'azurite_ore':    [((95, 80, 15), (130, 255, 255))],                              # blue
     'malachite_ore':  [((40, 80, 40), (90, 255, 255))],                               # green
     'vanadinite_ore': [((0, 140, 100), (20, 255, 255)), ((170, 140, 100), (180, 255, 255))],  # orange-red
 }
-# Shares are of the whole top face. A clean simulated ore shows its colour on about 46% of
-# it (a coloured square inset in a black face), so a mineral needs a tenth of the face and
-# twice the share of any other colour; otherwise the face is 'uncertain'.
-min_share = 0.10
+# Shares are of the whole top face (a clean simulated ore shows its colour on about 46% of
+# it). A mineral needs 3% of the face and twice the share of any other colour; otherwise
+# the face is 'uncertain'.
+min_share = 0.03
 min_ratio = 2.0
 
 naming_frames = 20                      # frames watched before the names are fixed
