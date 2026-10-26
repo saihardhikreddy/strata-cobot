@@ -4,15 +4,18 @@
 '''
 Strata Cobot - robotics course project, Amrita Vishwa Vidyapeetham.
 
-Ore perception: detects each ore's coloured face in the RGB-D camera and publishes its position as a tf2 frame.
+Ore perception: finds each ore by its shape in the depth image, classifies its mineral by
+a vote over the colours of its whole top face, and publishes its position as a tf2 frame.
+Real ores are rarely one clean colour, so a face counts as a mineral when enough of it,
+not all of it, shows that mineral's colour.
 '''
 
 # Authors:          C Saihardhik Reddy, R Gagan Chowdary, K Charan Saatvikh Reddy
 # Filename:         ore_perception.py
 # Functions:
-#			        detect_ores, on_conveyor, main
+#			        back_project, find_faces, colour_shares, classify_face, main
 #                   ore_tf: depthimagecb, colorimagecb, caminfocb, camera_to_base,
-#                           locate_face, name_ores, track_ores, publish_transforms,
+#                           detect, name_ores, track_ores, publish_transforms,
 #                           process_image, step
 # Nodes:		    ore_tf_publisher
 #			        Publishing Topics  - [ /tf ]
@@ -24,7 +27,7 @@ Ore perception: detects each ore's coloured face in the RGB-D camera and publish
 ################### IMPORT MODULES #######################
 
 import sys
-from collections import deque
+from collections import Counter, deque
 
 import cv2
 import numpy as np
@@ -39,90 +42,162 @@ from scipy.spatial.transform import Rotation
 import tf2_ros
 
 
-##################### TASK CONSTANTS #######################
+##################### CONSTANTS #######################
 
 color_topic = '/camera/camera/color/image_raw'
 depth_topic = '/camera/camera/aligned_depth_to_color/image_raw'
 camera_info_topic = '/camera/camera/color/camera_info'
 base_frame = 'base_link'
 
-# HSV bounds of each ore's coloured top face (OpenCV: H 0-180, S and V 0-255), from
-# camera frames. The faces are far more saturated than the orange terrain around them.
-color_ranges = {
-    'azurite_ore':    ((98, 200, 100), (112, 255, 255)),     # blue
-    'malachite_ore':  ((64, 200, 120), (84, 255, 255)),      # green
-    'vanadinite_ore': ((5, 225, 180), (14, 255, 255)),       # orange
+# Where to look: the conveyor's top surface in base_link, from the arena's collision mesh.
+conveyor_lo = np.array([-1.16, -0.94])
+conveyor_hi = np.array([0.16, -0.46])
+belt_z = -0.142
+
+# What an ore looks like to the depth camera: a 101.6 mm square block, 76.2 mm tall. Its top
+# face is the only surface 66-86 mm above the belt, and that band leaves a gap between ores
+# standing close together, where their sides would join up.
+face_band = (0.066, 0.086)              # height above the belt, m
+face_side_m = (0.080, 0.130)            # accepted length of each side of the fitted face
+min_face_px = 80
+
+# The colour of each mineral, as HSV ranges (OpenCV: H 0-180, S and V 0-255). Hue carries
+# the mineral; saturation and value only have to rule out grey, black and white matrix.
+# Orange is held to a brighter, more saturated range so that brown rock does not count.
+mineral_colours = {
+    'azurite_ore':    [((95, 80, 40), (130, 255, 255))],                              # blue
+    'malachite_ore':  [((40, 80, 40), (90, 255, 255))],                               # green
+    'vanadinite_ore': [((0, 140, 100), (20, 255, 255)), ((170, 140, 100), (180, 255, 255))],  # orange-red
 }
-total_ores = 4
+# Shares are of the whole top face. A clean simulated ore shows its colour on about 46% of
+# it (a coloured square inset in a black face), so a mineral needs a tenth of the face and
+# twice the share of any other colour; otherwise the face is 'uncertain'.
+min_share = 0.10
+min_ratio = 2.0
 
-min_face_area_px = 60           # smaller blobs are noise, not an ore face
-max_face_area_px = 4000
-min_fill_ratio = 0.6            # face area / its rotated bounding box: faces are square
-
-# The conveyor's top in base_link, from the arena's collision mesh, with room for the
-# ore standing on it. Only faces in here are ores waiting to be picked: one on the tool
-# or in a container is ignored, so its transform keeps the conveyor position.
-conveyor_lo = np.array([-1.16, -0.94, -0.10])
-conveyor_hi = np.array([0.16, -0.46, -0.03])
-
-naming_frames = 20              # frames watched before the names are fixed
-history_len = 30                # frames averaged into each published position
-same_ore_m = 0.05               # detections closer than this are the same ore
+naming_frames = 20                      # frames watched before the names are fixed
+history_len = 30                        # frames averaged into each published position
+same_ore_m = 0.05                       # detections closer than this are the same ore
 
 
 ##################### FUNCTION DEFINITION #######################
 
-def detect_ores(image):
+def back_project(depth, intrinsics, cam_to_base):
     '''
     Purpose:
     ---
-    Find the coloured top face of every ore in a frame
+    Every pixel of an aligned depth image as a point in base_link
 
     Input Arguments:
     ---
-    `image` :  [ np.ndarray ]   BGR colour frame
+    `depth` :        [ np.ndarray ]   HxW depth in metres, NaN where unknown
+    `intrinsics` :   [ tuple ]        (fx, fy, cx, cy)
+    `cam_to_base` :  [ np.ndarray ]   4x4 transform, optical frame -> base_link
 
     Returns:
     ---
-    `detections` :  [ list ]
-        (ore type, mask of the face) for each face found
+    `xyz` :  [ np.ndarray ]   HxWx3 points in base_link (NaN where the depth is)
     '''
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    detections = []
-    for ore_type, (lower, upper) in color_ranges.items():
-        mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in contours:
-            area = cv2.contourArea(c)
-            if not min_face_area_px <= area <= max_face_area_px:
-                continue
-            (_, _), (w, h), _ = cv2.minAreaRect(c)
-            if w * h <= 0 or area / (w * h) < min_fill_ratio:
-                continue
-            face = np.zeros(mask.shape, np.uint8)
-            cv2.drawContours(face, [c], -1, 255, cv2.FILLED)
-            detections.append((ore_type, face))
-    return detections
+    fx, fy, cx, cy = intrinsics
+    h, w = depth.shape
+    v, u = np.mgrid[0:h, 0:w]
+    pts = np.stack(((u - cx) * depth / fx, (v - cy) * depth / fy, depth), axis=-1)
+    return pts @ cam_to_base[:3, :3].T + cam_to_base[:3, 3]
 
 
-def on_conveyor(p):
+def find_faces(xyz):
     '''
     Purpose:
     ---
-    Whether a face centre in base_link lies on the conveyor
+    Find each ore's top face by shape alone: the regions of the conveyor that stand at an
+    ore's height above the belt and are the size of an ore's face. Colour plays no part,
+    so an ore is found however mixed its colour is.
 
     Input Arguments:
     ---
-    `p` :  [ np.ndarray ]   (x, y, z) in base_link
+    `xyz` :  [ np.ndarray ]   HxWx3 points in base_link, from back_project()
 
     Returns:
     ---
-    `inside` :  [ bool ]
+    `faces` :  [ list ]
+        (mask, centre) per face: a uint8 mask of its pixels, and the centre of the face in
+        base_link, from a rectangle fitted to its outline
     '''
-    return bool(np.all(p >= conveyor_lo) and np.all(p <= conveyor_hi))
+    x, y, z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
+    with np.errstate(invalid='ignore'):
+        band = ((x > conveyor_lo[0]) & (x < conveyor_hi[0]) & (y > conveyor_lo[1]) & (y < conveyor_hi[1])
+                & (z > belt_z + face_band[0]) & (z < belt_z + face_band[1]))
+    mask = cv2.morphologyEx(band.astype(np.uint8) * 255, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    faces = []
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] < min_face_px:
+            continue
+        face = labels == i
+        # The centre of a rectangle fitted to the face, rather than the median of its
+        # points: pixels on the edge blend in depth with what lies behind them and would
+        # pull a median towards the camera by several millimetres.
+        pts = np.column_stack((x[face], y[face])).astype(np.float32) * 1000.0
+        (rx, ry), (rw, rh), _ = cv2.minAreaRect(pts)
+        if not (face_side_m[0] * 1000 <= min(rw, rh) and max(rw, rh) <= face_side_m[1] * 1000):
+            continue                                        # not the size of an ore face
+        centre = np.array([rx / 1000.0, ry / 1000.0, float(np.nanmedian(z[face]))])
+        faces.append((face.astype(np.uint8) * 255, centre))
+    return faces
+
+
+def colour_shares(hsv, mask):
+    '''
+    Purpose:
+    ---
+    The share of a region's pixels showing each mineral's colour
+
+    Input Arguments:
+    ---
+    `hsv` :   [ np.ndarray ]   HxWx3 image in OpenCV HSV
+    `mask` :  [ np.ndarray ]   uint8 mask of the region
+
+    Returns:
+    ---
+    `shares` :  [ dict ]   mineral -> fraction of the region's pixels, 0 to 1
+    '''
+    total = max(1, cv2.countNonZero(mask))
+    shares = {}
+    for mineral, ranges in mineral_colours.items():
+        hit = np.zeros(mask.shape, np.uint8)
+        for lo, hi in ranges:
+            hit |= cv2.inRange(hsv, np.array(lo), np.array(hi))
+        shares[mineral] = cv2.countNonZero(hit & mask) / total
+    return shares
+
+
+def classify_face(hsv, mask):
+    '''
+    Purpose:
+    ---
+    The mineral of a face, by a vote over all of its pixels: the colour with the largest
+    share wins, provided it covers at least min_share of the face and has min_ratio times
+    the share of the next colour. Veins, dust and dark matrix only lower the winner's share.
+
+    Input Arguments:
+    ---
+    `hsv` :   [ np.ndarray ]   HxWx3 image in OpenCV HSV
+    `mask` :  [ np.ndarray ]   uint8 mask of the face
+
+    Returns:
+    ---
+    `mineral` :  [ str or None ]   None when no colour clearly wins ('uncertain')
+    `shares` :   [ dict ]          mineral -> share of the face
+    '''
+    inner = cv2.erode(mask, np.ones((3, 3), np.uint8))     # edge pixels mix with the background
+    if cv2.countNonZero(inner) >= min_face_px // 2:
+        mask = inner
+    shares = colour_shares(hsv, mask)
+    ranked = sorted(shares.items(), key=lambda kv: kv[1], reverse=True)
+    (best, s1), (_, s2) = ranked[0], ranked[1]
+    if s1 < min_share or s1 < min_ratio * s2:
+        return None, shares
+    return best, shares
 
 
 ##################### CLASS DEFINITION #######################
@@ -131,10 +206,9 @@ class ore_tf(Node):
     '''
     ___CLASS___
 
-    Description:    Detects the ores' coloured top faces in the camera image, locates
-                    each face in 3D from the aligned depth image, names each ore by its
-                    kind, and broadcasts one tf2 transform per ore from base_link to the
-                    centre of its top face.
+    Description:    Finds the ores on the conveyor by shape in the depth image, classifies
+                    each by a vote over its face's colours, names them, and broadcasts one
+                    tf2 transform per ore from base_link to the centre of its top face.
     '''
 
     def __init__(self):
@@ -168,7 +242,7 @@ class ore_tf(Node):
         self.cam_to_base = None         # 4x4, optical frame -> base_link (the camera is fixed)
 
         self.frames_seen = 0
-        self.candidates = []            # [(ore type, position)] gathered before naming
+        self.candidates = []            # [(mineral or None, position)] gathered before naming
         self.history = {}               # ore name -> recent face positions in base_link
         self.named = False
 
@@ -242,83 +316,82 @@ class ore_tf(Node):
         return m
 
 
-    def locate_face(self, face_mask, cam_to_base):
+    def detect(self, cam_to_base):
         '''
-        Description:    Position of a top face's centre in base_link. Every pixel of the
-                        face is back-projected with its own depth and moved into
-                        base_link; the median of those points is the face centre, which is
-                        robust to the noisy pixels along the face's edge.
+        Description:    One frame: every ore face on the conveyor, with its mineral.
 
         Args:
-            face_mask (np.ndarray):     255 on the face's pixels
             cam_to_base (np.ndarray):   4x4 transform, optical frame -> base_link
 
         Returns:
-            np.ndarray(3), or None if the face has no depth
+            list of (mineral or None, centre in base_link)
         '''
-        inner = cv2.erode(face_mask, np.ones((3, 3), np.uint8))
-        if cv2.countNonZero(inner) < 10:
-            inner = face_mask
-        v, u = np.nonzero(inner)
-        z = self.depth_image[v, u]
-        ok = np.isfinite(z)
-        if np.count_nonzero(ok) < 5:
-            return None
-        u, v, z = u[ok].astype(float), v[ok].astype(float), z[ok]
-        fx, fy, cx, cy = self.intrinsics
-        pts = np.column_stack(((u - cx) * z / fx, (v - cy) * z / fy, z, np.ones_like(z)))
-        pts_base = (cam_to_base @ pts.T).T[:, :3]
-        return np.median(pts_base, axis=0)
+        xyz = back_project(self.depth_image, self.intrinsics, cam_to_base)
+        hsv = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2HSV)
+        found = []
+        for mask, centre in find_faces(xyz):
+            mineral, _ = classify_face(hsv, mask)
+            found.append((mineral, centre))
+        return found
 
 
     def name_ores(self):
         '''
-        Description:    Fix the ore names from the detections gathered so far. Detections of
-                        one kind closer than same_ore_m are one ore; each kind is then
+        Description:    Fix the ore names from the detections gathered so far. Detections
+                        closer than same_ore_m are one ore, whatever their colour; its
+                        mineral is the majority vote of its frames. Each mineral is then
                         numbered from 1, nearest the arm base first.
         '''
-        clusters = {}                                   # ore type -> [[positions]]
-        for ore_type, p in self.candidates:
-            groups = clusters.setdefault(ore_type, [])
+        groups = []                                     # [[(mineral, position)]]
+        for mineral, p in self.candidates:
             for g in groups:
-                if np.linalg.norm(np.median(g, axis=0) - p) < same_ore_m:
-                    g.append(p)
+                if np.linalg.norm(np.median([q for _, q in g], axis=0) - p) < same_ore_m:
+                    g.append((mineral, p))
                     break
             else:
-                groups.append([p])
+                groups.append([(mineral, p)])
 
-        # A real ore is seen in most frames; a stray blob in only a few.
+        # A real ore is seen in most frames; a stray region in only a few.
         min_hits = max(3, naming_frames // 3)
-        for ore_type, groups in clusters.items():
-            groups = [g for g in groups if len(g) >= min_hits]
-            groups.sort(key=lambda g: float(np.linalg.norm(np.median(g, axis=0)[:2])))
-            for i, g in enumerate(groups):
-                name = f'{ore_type}_{i + 1}'
+        by_mineral = {}
+        for g in groups:
+            if len(g) < min_hits:
+                continue
+            votes = Counter(m for m, _ in g if m is not None)
+            if not votes:
+                self.get_logger().warn(f'Ore at {np.median([q for _, q in g], axis=0).round(3)} '
+                                       'could not be classified; skipping it.')
+                continue
+            mineral, count = votes.most_common(1)[0]
+            by_mineral.setdefault(mineral, []).append([q for _, q in g])
+            self.get_logger().info(f'Ore classified as {mineral} in {count} of {len(g)} frames.')
+
+        for mineral, ores in by_mineral.items():
+            ores.sort(key=lambda g: float(np.linalg.norm(np.median(g, axis=0)[:2])))
+            for i, g in enumerate(ores):
+                name = f'{mineral}_{i + 1}'
                 self.history[name] = deque(g[-history_len:], maxlen=history_len)
                 x, y, z = np.median(g, axis=0)
                 self.get_logger().info(f'{name}: ({x:.3f}, {y:.3f}, {z:.3f}) in {base_frame}')
         self.named = True
-        if len(self.history) != total_ores:
-            self.get_logger().warn(f'{len(self.history)} ores named, expected {total_ores}.')
 
 
     def track_ores(self, found):
         '''
-        Description:    Add each detection to the history of the named ore of its kind
-                        nearest to it, if it is close enough to be that ore.
+        Description:    Add each detection to the history of the named ore nearest to it, if
+                        it is close enough and shows that ore's mineral. A face partly hidden
+                        by the arm is left out rather than allowed to move the ore.
 
         Args:
-            found (list):   [(ore type, position)] on the conveyor this frame
+            found (list):   [(mineral or None, position)] this frame
         '''
-        for ore_type, p in found:
+        for mineral, p in found:
             best, best_d = None, same_ore_m
             for name, hist in self.history.items():
-                if not name.startswith(ore_type):
-                    continue
                 d = float(np.linalg.norm(np.median(np.array(hist), axis=0) - p))
                 if d < best_d:
                     best, best_d = name, d
-            if best is not None:
+            if best is not None and mineral is not None and best.startswith(mineral):
                 self.history[best].append(p)
 
 
@@ -343,7 +416,7 @@ class ore_tf(Node):
 
     def process_image(self):
         '''
-        Description:    Timer function: detect, locate, name or track, and publish.
+        Description:    Timer function: detect, name or track, and publish.
         '''
         try:
             self.step()
@@ -360,12 +433,7 @@ class ore_tf(Node):
         if cam_to_base is None:
             return
 
-        found = []
-        for ore_type, face in detect_ores(self.cv_image):
-            p = self.locate_face(face, cam_to_base)
-            if p is not None and on_conveyor(p):
-                found.append((ore_type, p))
-
+        found = self.detect(cam_to_base)
         if self.named:
             self.track_ores(found)
             return
