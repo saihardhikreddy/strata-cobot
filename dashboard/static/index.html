@@ -91,6 +91,7 @@
   <div class="controls">
     <button class="primary" id="run-sorting">▶ Run ore sorting</button>
     <button class="primary" id="run-lap">▶ Run mobile robot lap</button>
+    <button id="rock" title="Places a rock on the robot's path that the map does not know about">⬛ Drop a surprise rock</button>
     <button class="stop" id="stop">■ Stop</button>
     <label class="check"><input type="checkbox" id="gazebo"> Also open the Gazebo 3D window</label>
   </div>
@@ -146,7 +147,7 @@
       <canvas id="map" height="560"></canvas>
       <div class="legend">
         <span><i style="background:#e0662c"></i>leg 1 path</span><span><i style="background:#3d8fe6"></i>leg 2 path</span><span><i style="background:#3fbf5f"></i>leg 3 path</span>
-        <span><i style="background:#9aa3ab"></i>driven trail (dotted)</span><span>dark shapes = rocks</span>
+        <span><i style="background:#9aa3ab"></i>driven trail (dotted)</span><span><i style="background:#8a9399"></i>abandoned path (dashed)</span><span><i style="background:#e5534b"></i>surprise rock, as the lidar saw it</span><span>dark shapes = rocks</span>
       </div>
     </div>
     <div class="stack">
@@ -160,6 +161,7 @@
           <div class="stat"><div class="v" id="speed">—</div><div class="l">speed, m/s</div></div>
           <div class="stat"><div class="v" id="driven">—</div><div class="l">driven, m</div></div>
           <div class="stat"><div class="v" id="planned">—</div><div class="l">planned, m</div></div>
+          <div class="stat"><div class="v" id="replans">—</div><div class="l">re-plans around obstacles</div></div>
         </div>
       </div>
     </div>
@@ -193,6 +195,7 @@ async function post(url, body) {
 $('run-sorting').onclick = async () => { show('sorting'); const r = await post('/api/run', { mode: 'sorting', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
 $('run-lap').onclick = async () => { show('lap'); const r = await post('/api/run', { mode: 'lap', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
 $('stop').onclick = () => post('/api/stop');
+$('rock').onclick = async () => { show('lap'); const r = await post('/api/obstacle'); if (!r.ok) alert(r.message); };
 document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => show(t.dataset.view)));
 function show(v) {
   view = v;
@@ -215,7 +218,8 @@ function render() {
   $('phase').textContent = run.phase; $('phase').className = 'pill ' + run.phase;
   $('message').textContent = run.message;
   $('elapsed').textContent = run.elapsed ? `${Math.floor(run.elapsed / 60)}:${String(Math.floor(run.elapsed % 60)).padStart(2, '0')}` : '';
-  $('run-sorting').disabled = busy; $('run-lap').disabled = busy; $('stop').disabled = !busy && run.phase !== 'done' && run.phase !== 'error';
+  $('run-sorting').disabled = busy; $('run-lap').disabled = busy;
+  $('rock').disabled = !(run.mode === 'lap' && run.phase === 'running'); $('stop').disabled = !busy && run.phase !== 'done' && run.phase !== 'error';
   if (run.mode && run.mode !== lastMode) { lastMode = run.mode; show(run.mode); }
   const log = $('log'); const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = run.log.length ? run.log.join('\n') : 'The log of the simulator and the robot nodes appears here.';
@@ -303,6 +307,16 @@ function draw() {
   const X = (x) => ((x - info.origin[0]) / info.res) * s, Y = (y) => h - ((y - info.origin[1]) / info.res) * s;
   if (mapImg && mapImg.complete) ctx.drawImage(mapImg, 0, 0, w, h);
   const px = devicePixelRatio;
+  ctx.strokeStyle = '#8a9399'; ctx.lineWidth = 2 * devicePixelRatio; ctx.setLineDash([6 * devicePixelRatio, 5 * devicePixelRatio]);
+  (state.abandoned || []).forEach((p) => { ctx.beginPath(); p.forEach(([x, y], j) => (j ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.stroke(); });
+  ctx.setLineDash([]);
+  const pl = state.planning || {};
+  ctx.fillStyle = '#e5534b';
+  (pl.obstacles || []).forEach(([x, y]) => { ctx.beginPath(); ctx.arc(X(x), Y(y), 1.6 * devicePixelRatio, 0, 7); ctx.fill(); });
+  (state.dropped || []).forEach(([x, y]) => {
+    const h = (0.175 / info.res) * s; ctx.strokeStyle = '#e5534b'; ctx.lineWidth = 2 * devicePixelRatio;
+    ctx.strokeRect(X(x) - h, Y(y) - h, 2 * h, 2 * h);
+  });
   state.paths.forEach((p, i) => {
     ctx.strokeStyle = LEG_COLORS[i % 3]; ctx.lineWidth = 3 * px; ctx.beginPath();
     p.forEach(([x, y], j) => (j ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)))); ctx.stroke();
@@ -342,6 +356,7 @@ function renderLapPanel() {
   $('speed').textContent = o ? o.v.toFixed(2) : '—';
   let d = 0; const tr = state.trail; for (let i = 1; i < tr.length; i++) d += Math.hypot(tr[i][0] - tr[i - 1][0], tr[i][1] - tr[i - 1][1]);
   $('driven').textContent = tr.length ? d.toFixed(1) : '—';
+  $('replans').textContent = pl.replans != null ? pl.replans : '—';
   $('planned').textContent = pl.path_lengths && pl.path_lengths.length ? pl.path_lengths.reduce((a, b) => a + b, 0).toFixed(1) : '—';
 }
 window.addEventListener('resize', draw);
