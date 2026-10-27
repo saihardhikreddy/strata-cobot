@@ -8,6 +8,7 @@ SCRIPTS = [
     'scripts/arm_manipulation.py',
     'scripts/path_planning.py',
     'scripts/path_following.py',
+    'scripts/package_handoff.py',
 ]
 
 setup(
