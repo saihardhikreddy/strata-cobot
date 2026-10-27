@@ -53,7 +53,14 @@ MISSIONS = {
                 'done': 'All ores handled'},
     'lap': {'launch': 'task2b.launch.py', 'nodes': ['path_planning.py', 'path_following.py'],
             'done': 'Lap complete'},
+    # The whole loop: the eBot's world with the arm added to it. The eBot hauls the ore
+    # package to the arm, the arm lifts it onto the conveyor intake, the eBot drives home.
+    'mission': {'launch': 'task2b.launch.py', 'arm': True,
+                'nodes': [['path_planning.py', '--ros-args', '-p', 'handoff:=true'], 'path_following.py',
+                          'package_handoff.py'],
+                'done': 'Lap complete'},
 }
+ARM_READY = 'ready: arm verified'
 WORLD_READY = 'world ready'
 MINERAL_BGR = {'azurite_ore': (230, 130, 40), 'malachite_ore': (70, 200, 60), 'vanadinite_ore': (30, 110, 245)}
 
@@ -116,20 +123,32 @@ class MissionRunner:
             line = line.rstrip()
             if not line:
                 continue
-            if label != 'world' or any(k in line for k in ('[launch.user]', 'ERROR', 'error')):
+            if label not in ('world', 'arm') or any(k in line for k in ('[launch.user]', 'ERROR', ARM_READY)):
                 self.note(f'[{label}] {line[-220:]}')
             if label == 'world' and WORLD_READY in line and self.phase == 'starting':
-                with self.lock:
-                    self.phase, self.message = 'running', 'World ready. Robot nodes started.'
-                for n in mission['nodes']:
-                    self.note(f'Starting {n}')
-                    self.spawn(n, ['python3', os.path.join(SCRIPTS, n)])
+                if mission.get('arm'):
+                    self.message = 'World ready. Adding the arm to it...'
+                    self.note('Spawning the UR7e arm into the running world.')
+                    self.spawn('arm', ['ros2', 'launch', 'ur_description', 'spawn_ur7e.launch.py'])
+                else:
+                    self.start_nodes(mission)
+            if label == 'arm' and ARM_READY in line and self.phase == 'starting':
+                self.start_nodes(mission)
             if mission['done'] in line and self.phase == 'running':
                 with self.lock:
                     self.phase, self.message, self.finished = 'done', 'Mission complete.', time.time()
-        if self.phase in ('starting', 'running') and label == 'world':
+        if self.phase in ('starting', 'running') and label in ('world', 'arm'):
             with self.lock:
                 self.phase, self.message, self.finished = 'error', 'The simulated world stopped unexpectedly.', time.time()
+
+    def start_nodes(self, mission):
+        '''The world (and the arm, if the mission has one) is up: start the robot nodes.'''
+        with self.lock:
+            self.phase, self.message = 'running', 'World ready. Robot nodes started.'
+        for n in mission['nodes']:
+            args = n if isinstance(n, list) else [n]
+            self.note(f'Starting {args[0]}')
+            self.spawn(args[0], ['python3', os.path.join(SCRIPTS, args[0])] + args[1:])
 
     def stop(self):
         with self.lock:
@@ -318,7 +337,7 @@ def drop_rock(node, runner):
     service, which the simulated world offers to anyone.
     '''
     snap = runner.snapshot()
-    if snap['mode'] != 'lap' or snap['phase'] != 'running':
+    if snap['mode'] not in ('lap', 'mission') or snap['phase'] != 'running':
         return False, 'Start the mobile robot lap first.'
     with node.lock:
         path = node.paths[-1] if node.paths else None
