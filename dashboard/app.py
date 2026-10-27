@@ -3,13 +3,15 @@
 Strata Cobot dashboard: one-click runs and a live view of both robots.
 
 A small web app on http://localhost:8765. Its buttons launch the simulated world and the
-robot nodes for either mission (ore sorting with the arm, or the mobile robot's lap), and
-the page mirrors what the robots see and do, live:
+robot nodes for any of three missions (ore sorting with the arm, the mobile robot's lap, or
+the full mission joining the two), and the page mirrors what the robots see and do, live:
 
   * ore sorting: the arm camera with every detected ore outlined and labelled, each ore's
     colour vote, the arm's current step, the magnet force and the sorted count;
   * mobile robot lap: the arena map with the planned paths, the robot's position and trail,
-    and the lap's progress.
+    and the lap's progress;
+  * full mission: the lap view with the arm camera beside it, and the handoff stage as the
+    arm lifts the ore package off the eBot onto the conveyor.
 
 Run it with dashboard/run_dashboard.sh, which sources ROS 2 first. No extra packages are
 needed beyond ROS 2 Jazzy (rclpy, cv_bridge) and OpenCV.

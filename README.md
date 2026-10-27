@@ -107,10 +107,20 @@ Requirements: Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, and the e-Yantra Strat
    ros2 run strata_cobot path_following.py
    ```
 
+4. Full mission, in five terminals: the eBot's world, the arm added to it (wait until it logs `ready: arm verified`), then the three nodes, with the planner in handoff mode:
+
+   ```bash
+   ros2 launch eyantra_kepler_colony task2b.launch.py
+   ros2 launch ur_description spawn_ur7e.launch.py
+   ros2 run strata_cobot path_planning.py --ros-args -p handoff:=true
+   ros2 run strata_cobot path_following.py
+   ros2 run strata_cobot package_handoff.py
+   ```
+
 ## Repository layout
 
 ```
-src/strata_cobot/   ROS 2 package with the four nodes
+src/strata_cobot/   ROS 2 package with the five nodes
 dashboard/          web dashboard: one-click runs and a live view of both robots
 experiments/        perception experiments: impurities, real mineral photos, calibration
 docs/               report PDF, slides (and the script that builds them), figures
