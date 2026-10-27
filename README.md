@@ -18,6 +18,8 @@ Each trial used a freshly launched world with randomised ores or rocks.
 | Arm manipulation | 16 of 16 ores sorted into the correct container over four trials, no safety stops |
 | Path planning | Paths as short as the reference shortest path (efficiency up to 1.00) |
 | Path following | Within 0.09 m of every path, no collisions |
+| Full mission | eBot hauls the ore package to the arm, the arm places it on the conveyor, the eBot drives home: about 2 min, one click |
+| Re-planning | A rock the map does not have is seen by the lidar, and a new path is planned in 0.1 s |
 
 ## How it works
 
@@ -26,7 +28,8 @@ Each trial used a freshly launched world with randomised ores or rocks.
 | `ore_perception.py` | Finds each ore by shape in the depth image, classifies its mineral by a vote over the colours of its whole face (real ores are rarely one colour), publishes tf2 frames |
 | `arm_manipulation.py` | Damped least-squares IK with the tool vertical, collision-checked joint-space routes, straight vertical descents by resolved-rate control, force-confirmed magnet picks |
 | `path_planning.py` | Clearance map from `/map`, A* on a 5 cm grid, shortcutting and corner tightening, clearance chosen so the path matches the shortest length |
-| `path_following.py` | Pure-pursuit path following, turn to the final heading, stop on the pose |
+| `path_following.py` | Pure-pursuit path following, turn to the final heading, stop on the pose; stops and reports anything the lidar sees on the path that the map does not have |
+| `package_handoff.py` | The arm's side of the handoff: finds the ore package on the eBot, lifts it onto the conveyor intake, releases the eBot |
 
 ![System architecture](docs/images/architecture.png)
 
@@ -56,9 +59,16 @@ python3 experiments/calibrate_colour.py        # tune on 90 photos, test on the 
 python3 experiments/real_mineral_photos.py     # first detector vs colour vote
 ```
 
+## Full mission and re-planning
+
+- **Full mission.** The arm is spawned into the mobile robot's world. The eBot collects the ore package and drives to the arm; the arm finds the package from the eBot's odometry, refined by the depth camera (4 mm), picks it with the magnet (2.94 N confirms the 0.30 kg package), lifts it clear of the deck and sets it on the conveyor intake; the eBot then drives home.
+- **Re-planning.** Planned paths keep at least 0.30 m from every mapped rock, so a lidar return within 0.26 m of the path ahead is something the map does not have. The follower stops and reports it on `/ebot_obstacles`; the planner adds it to its map and re-plans from where the robot stands.
+
+![Re-planning around a surprise rock](docs/images/dashboard_replan.jpg)
+
 ## Dashboard: one-click runs, live view
 
-`dashboard/` is a small web app that runs either mission at the press of a button and mirrors it live: the arm camera with each detected ore outlined and its colour vote, what the arm is doing, the magnet force and the sorted count; or the arena map with the planned paths, the mobile robot's position and the lap's progress.
+`dashboard/` is a small web app that runs ore sorting, the mobile robot lap or the full mission at the press of a button and mirrors it live: the arm camera with each detected ore outlined and its colour vote, what the arm is doing, the magnet force and the sorted count; or the arena map with the planned paths, the mobile robot's position and the lap's progress.
 
 ```bash
 dashboard/run_dashboard.sh          # opens http://localhost:8765 in the browser
@@ -69,7 +79,7 @@ dashboard/install_launcher.sh       # once: adds "Strata Cobot" to the Ubuntu ap
 
 ![Dashboard during the mobile robot lap](docs/images/dashboard_lap.jpg)
 
-It needs only ROS 2 Jazzy and the simulation workspace (`~/ros2_ws`, or set `ROS2_WS`), and runs the nodes straight from `src/strata_cobot/scripts`, so no build is needed for it. Tick *Also open the Gazebo 3D window* to watch the simulator itself as well.
+It needs only ROS 2 Jazzy and the simulation workspace (`~/ros2_ws`, or set `ROS2_WS`), and runs the nodes straight from `src/strata_cobot/scripts`, so no build is needed for it. Tick *Also open the Gazebo 3D window* to watch the simulator itself as well. During a lap, *Drop a surprise rock* places a rock on the robot's path that the map does not know about, to show it re-planning.
 
 ## Running it
 
