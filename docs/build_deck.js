@@ -348,6 +348,21 @@ pres.addSection({ title: 'Results' });
   s.addNotes('Every trial used a freshly launched world with randomised ores or rocks, checked by the automatic evaluator that comes with the simulation. Sorting was perfect in both trials on different ore mixes. Path efficiency reached 1.00; the small shortfall in one trial comes from the reference path varying between runs.');
 }
 
+// 11b. Hand-off and re-planning
+{
+  const s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Results' });
+  s.addText('The full loop: hand-off and re-planning', { placeholder: 'title' });
+  s.addImage({ path: IMG('dashboard_mission.jpg'), x: 0.6, y: 1.45, w: 5.9, h: 3.69, objectName: 'mission-shot',
+    altText: 'Dashboard after a full mission: all five stages ticked, the package on the conveyor' });
+  s.addImage({ path: IMG('dashboard_replan.jpg'), x: 6.8, y: 1.45, w: 5.9, h: 4.43, objectName: 'replan-shot',
+    altText: 'Dashboard map with an abandoned path, a surprise rock and the new path around it' });
+  txt(s, 'Full mission, one click, about 2 min: the eBot brings the ore package, the arm lifts it onto the conveyor (2.94 N = 0.30 kg held), the eBot drives home.',
+    { x: 0.6, y: 5.3, w: 5.9, h: 1.2, fontSize: 14, color: C.text2 });
+  txt(s, 'Surprise rock: the lidar sees it within 0.26 m of the path, the eBot stops and the planner re-plans in 0.1 s.',
+    { x: 6.8, y: 6.0, w: 5.9, h: 0.9, fontSize: 14, color: C.text2 });
+  s.addNotes('Two things the first version could not do. First, the full loop: the eBot hauls the ore package to the arm, the arm finds it with odometry and the depth camera, lifts it off the deck and places it on the conveyor, then the eBot drives home. Second, obstacles the map does not have: our paths always keep 30 cm from mapped rocks, so anything the lidar sees closer than 26 cm to the path is new. The robot stops, the planner adds it to the map and re-plans in a tenth of a second.');
+}
+
 // 12. Challenges grid
 {
   const s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Results' });
@@ -374,13 +389,13 @@ pres.addSection({ title: 'Results' });
 {
   const s = pres.addSlide({ masterName: 'CLOSING_DARK', sectionTitle: 'Results' });
   s.addText('Both robots complete their missions end to end', { placeholder: 'title' });
-  const done = ['Sorting: 8 of 8 ores in the right container', 'Planning: paths as short as the reference', 'Every planner and controller written from scratch'];
+  const done = ['Sorting: 16 of 16 ores in the right container', 'Planning: paths as short as the reference', 'Hand-off: eBot to arm to conveyor', 'Re-planning around unmapped rocks', 'Every algorithm written from scratch'];
   done.forEach((d, i) => {
-    numDot(s, 0.7, 2.0 + i * 1.05, i + 1, C.accent1, `done-${i + 1}`);
-    txt(s, d, { x: 1.45, y: 2.02 + i * 1.05, w: 5.6, h: 0.75, fontSize: 20, color: C.background1, valign: 'top' });
+    numDot(s, 0.7, 1.9 + i * 0.82, i + 1, C.accent1, `done-${i + 1}`);
+    txt(s, d, { x: 1.45, y: 1.93 + i * 0.82, w: 5.6, h: 0.7, fontSize: 18, color: C.background1, valign: 'top' });
   });
   txt(s, 'Next', { x: 7.4, y: 1.95, w: 5.2, h: 0.5, fontSize: 22, bold: true, color: C.accent4 });
-  const next = ['Hand ore from the eBot to the arm', 'Re-plan around rocks the map misses', 'Train a classifier on real ore samples', 'Move to physical robots'];
+  const next = ['Train a classifier on real ore samples', 'Move to physical robots'];
   txt(s, next.map((n, i) => ({ text: n, options: { bullet: true, breakLine: i < next.length - 1 } })),
     { x: 7.4, y: 2.6, w: 5.2, h: 2.8, fontSize: 18, color: C.background2, paraSpaceAfter: 10 });
   txt(s, 'Thank you  ·  Questions?', { x: 0.7, y: 6.2, w: 11.9, h: 0.6, fontSize: 20, bold: true, color: C.background1 });
