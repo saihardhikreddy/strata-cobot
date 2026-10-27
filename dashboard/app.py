@@ -190,6 +190,7 @@ class DashboardNode(Node):
         self.create_subscription(OccupancyGrid, '/map', self.mapcb, latched)
         self.create_subscription(Path, '/ebot_path', self.pathcb, latched)
         self.create_subscription(Odometry, '/odom', self.odomcb, 10)
+        self.rocks_dropped = 0
         self.reset(None)
 
     def reset(self, mode):
@@ -201,6 +202,8 @@ class DashboardNode(Node):
             self.arm_status = None
             self.map_png, self.map_info = None, None
             self.paths, self.last_path_stamp = [], None
+            self.abandoned = []                 # paths replaced by a re-plan
+            self.dropped = []                   # surprise rocks placed from the dashboard
             self.odom = None
             self.trail = collections.deque(maxlen=600)
 
@@ -242,8 +245,15 @@ class DashboardNode(Node):
         if stamp == self.last_path_stamp:
             return
         self.last_path_stamp = stamp
+        pts = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses]
+        # A leg starts at one of the fixed poses; a path that starts anywhere else is a
+        # re-plan of the current leg, made around an obstacle the map did not have.
+        fixed = ((0.0, 0.0), (6.0, 1.9), (0.0, 1.9))
+        replan = pts and min(math.hypot(pts[0][0] - fx, pts[0][1] - fy) for fx, fy in fixed) > 0.05
         with self.lock:
-            self.paths.append([[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses])
+            if replan and self.paths:
+                self.abandoned.append(self.paths.pop())
+            self.paths.append(pts)
 
     def odomcb(self, msg):
         p, q, t = msg.pose.pose.position, msg.pose.pose.orientation, msg.twist.twist
@@ -258,7 +268,8 @@ class DashboardNode(Node):
         with self.lock:
             return {'perception': self.data['perception'], 'sorter': self.data['sorter'],
                     'planning': self.data['planning'], 'force': list(self.force), 'arm_status': self.arm_status,
-                    'map': self.map_info, 'paths': self.paths, 'odom': self.odom, 'trail': list(self.trail)}
+                    'map': self.map_info, 'paths': self.paths, 'abandoned': self.abandoned, 'dropped': self.dropped,
+                    'odom': self.odom, 'trail': list(self.trail)}
 
     def camera_jpeg(self):
         '''The latest camera frame with each detected ore outlined and labelled.'''
@@ -300,6 +311,62 @@ class DashboardNode(Node):
 
 ##################### WEB SERVER #######################
 
+def drop_rock(node, runner):
+    '''
+    Spawn a rock-sized box on the mobile robot's current path, about 1.8 m ahead of it, to
+    show it re-planning around an obstacle the map does not have. Uses Gazebo's create
+    service, which the simulated world offers to anyone.
+    '''
+    snap = runner.snapshot()
+    if snap['mode'] != 'lap' or snap['phase'] != 'running':
+        return False, 'Start the mobile robot lap first.'
+    with node.lock:
+        path = node.paths[-1] if node.paths else None
+        odom = node.odom
+    if not path or not odom:
+        return False, 'No path yet: wait until the robot is driving.'
+    # Resample the path every 5 cm, find the point nearest the robot, and walk 1.8 m on
+    # from there. (The nearest corner of the raw path can lie behind the robot.)
+    dense = [path[0]]
+    for (x0, y0), (x1, y1) in zip(path[:-1], path[1:]):
+        n = max(1, int(math.hypot(x1 - x0, y1 - y0) / 0.05))
+        dense += [(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n) for k in range(1, n + 1)]
+    i = min(range(len(dense)), key=lambda k: math.hypot(dense[k][0] - odom['x'], dense[k][1] - odom['y']))
+    travelled, target = 0.0, None
+    for k in range(i + 1, len(dense)):
+        travelled += math.hypot(dense[k][0] - dense[k - 1][0], dense[k][1] - dense[k - 1][1])
+        if travelled >= 1.8:
+            target = dense[k]
+            break
+    if target is None:
+        return False, 'Too close to the end of this leg; try on the next one.'
+    # The ground's height in Gazebo: /odom reports z = 0, so ask Gazebo where the robot stands.
+    pose = subprocess.run(['gz', 'model', '-m', 'ebot', '-p'], capture_output=True, text=True, timeout=10).stdout.splitlines()
+    try:
+        ground = float(pose[[j for j, l in enumerate(pose) if 'Pose [' in l][0] + 1].strip(' []').split()[2])
+    except (IndexError, ValueError):
+        return False, 'Could not read the robot\'s position from Gazebo.'
+    node.rocks_dropped += 1
+    name = f'surprise_rock_{node.rocks_dropped}'
+    size, h = 0.35, 0.6             # taller than the lidar's scan plane (0.235 m above the ground)
+    sdf = (f'<sdf version="1.6"><model name="{name}"><static>true</static>'
+           f'<pose>{target[0]:.3f} {target[1]:.3f} {ground + h / 2:.3f} 0 0 0.4</pose><link name="link">'
+           f'<collision name="c"><geometry><box><size>{size} {size} {h}</size></box></geometry></collision>'
+           f'<visual name="v"><geometry><box><size>{size} {size} {h}</size></box></geometry>'
+           f'<material><ambient>0.35 0.3 0.28 1</ambient><diffuse>0.35 0.3 0.28 1</diffuse></material></visual>'
+           f'</link></model></sdf>')
+    req = 'sdf: ' + json.dumps(sdf)
+    out = subprocess.run(['gz', 'service', '-s', '/world/eyantra_kepler_world/create', '--reqtype', 'gz.msgs.EntityFactory',
+                          '--reptype', 'gz.msgs.Boolean', '--timeout', '5000', '--req', req],
+                         capture_output=True, text=True, timeout=15)
+    if 'true' not in out.stdout:
+        return False, f'Gazebo did not create the rock: {(out.stdout + out.stderr).strip()[:200]}'
+    runner.note(f'Dropped {name} on the path at ({target[0]:.2f}, {target[1]:.2f}).')
+    with node.lock:
+        node.dropped.append([round(target[0], 3), round(target[1], 3)])
+    return True, f'Rock dropped at ({target[0]:.2f}, {target[1]:.2f}).'
+
+
 def make_handler(node, runner):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -337,6 +404,9 @@ def make_handler(node, runner):
                 if mode not in MISSIONS:
                     return self.send(400, b'{"ok": false, "message": "unknown mission"}', 'application/json')
                 ok, msg = runner.start(mode, bool(body.get('gazebo')))
+                return self.send(200, json.dumps({'ok': ok, 'message': msg}).encode(), 'application/json')
+            if path == '/api/obstacle':
+                ok, msg = drop_rock(node, runner)
                 return self.send(200, json.dumps({'ok': ok, 'message': msg}).encode(), 'application/json')
             if path == '/api/stop':
                 threading.Thread(target=runner.stop, daemon=True).start()
