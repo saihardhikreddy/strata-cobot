@@ -11,13 +11,13 @@ Path planning: plans a collision-free path on /map for each leg of the lap and s
 # Filename:         path_planning.py
 # Functions:
 #			        wrap_angle, yaw_to_quaternion, main
-#                   ebot_planner: mapcb, odomcb, to_cell, to_point, clearance_at,
+#                   ebot_planner: mapcb, build_clearance, obstaclecb, odomcb, to_cell, to_point, clearance_at,
 #                                 astar, segment_clear, shortcut, plan_path, path_length,
 #                                 publish_path, request_ore_package, spawn_done,
 #                                 at_pose, process_planning
 # Nodes:		    ebot_planner_node
 #			        Publishing Topics  - [ /ebot_path, /path_planning/status ]
-#                   Subscribing Topics - [ /map, /odom ]
+#                   Subscribing Topics - [ /map, /odom, /ebot_obstacles ]
 #                   Service Clients    - [ /spawn_ore_package ]
 
 
@@ -34,7 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDurabilityPolicy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
@@ -88,6 +88,7 @@ still_linear = 0.01                 # m/s
 still_angular = 0.02                # rad/s
 settle_time = 0.5                   # seconds of standing still before a step counts as done
 package_settle_time = 1.5           # seconds for the package to land before step 2 starts
+obstacle_grow_m = 0.03              # each reported lidar point is marked as a disc this big
 
 
 def wrap_angle(angle):
@@ -163,6 +164,8 @@ class ebot_planner(Node):
 
         self.map_sub = self.create_subscription(OccupancyGrid, map_topic, self.mapcb, latched)
         self.odom_sub = self.create_subscription(Odometry, odom_topic, self.odomcb, 10)
+        # Obstacles the map does not have, reported by the follower when one blocks its path.
+        self.obstacle_sub = self.create_subscription(PoseArray, '/ebot_obstacles', self.obstaclecb, 10)
 
         ############ Topic PUBLISHERS ############
 
@@ -187,6 +190,8 @@ class ebot_planner(Node):
         self.spawn_pending = False      # a /spawn_ore_package call is in flight
         self.spawned_at = None          # sim time the package was confirmed
         self.path_lengths = []          # length of each published path, for the log
+        self.extra_obstacles = []       # [(x, y)] reported by the follower, added to the map
+        self.replans = 0
 
         self.get_logger().info('Path planning node initialised.')
 
@@ -207,7 +212,23 @@ class ebot_planner(Node):
 
         # Clearance at full resolution, so it is not overstated by the coarse cells. The
         # map's edge counts as an obstacle, so paths stay inside its bounds.
-        free = np.where(occupied, 0, 255).astype(np.uint8)
+        self.map_info = info
+        self.occupied = occupied
+        self.build_clearance()
+        factor = max(1, int(round(plan_res / info.resolution)))
+        h, w = info.height // factor, info.width // factor
+        self.get_logger().info(f'Map received: {info.width}x{info.height} at {info.resolution:.3f} m, '
+                               f'origin ({info.origin.position.x:.2f}, {info.origin.position.y:.2f}); '
+                               f'planning on {w}x{h} at {info.resolution * factor:.3f} m.')
+
+
+    def build_clearance(self):
+        '''
+        Description:    The clearance maps from self.occupied: at full resolution for
+                        checking straight legs, and sampled onto the coarse planning grid.
+        '''
+        info = self.map_info
+        free = np.where(self.occupied, 0, 255).astype(np.uint8)
         free[0, :] = free[-1, :] = 0
         free[:, 0] = free[:, -1] = 0
         fine = cv2.distanceTransform(free, cv2.DIST_L2, 5) * info.resolution
@@ -221,9 +242,43 @@ class ebot_planner(Node):
 
         self.grid = (clearance, info.origin.position.x, info.origin.position.y, info.resolution * factor)
         self.fine = (fine, info.resolution)       # straight legs are checked on this
-        self.get_logger().info(f'Map received: {info.width}x{info.height} at {info.resolution:.3f} m, '
-                               f'origin ({info.origin.position.x:.2f}, {info.origin.position.y:.2f}); '
-                               f'planning on {w}x{h} at {info.resolution * factor:.3f} m.')
+
+
+    def obstaclecb(self, data):
+        '''
+        Description:    The follower has stopped because something not on the map blocks
+                        its path. Add what its lidar sees to the map, and plan a new path
+                        for the current step from where the eBot stands.
+
+        Args:
+            data (PoseArray):    lidar returns around the eBot, in the map frame
+        '''
+        if self.grid is None or self.odom is None or self.state != 'drive' or not data.poses:
+            return
+        info = self.map_info
+        res = info.resolution
+        r = int(math.ceil(obstacle_grow_m / res))
+        disc = np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r
+        for p in data.poses:
+            col = int(math.floor((p.position.x - info.origin.position.x) / res))
+            row = int(math.floor((p.position.y - info.origin.position.y) / res))
+            if r <= row < info.height - r and r <= col < info.width - r:
+                self.occupied[row - r:row + r + 1, col - r:col + r + 1] |= disc
+            self.extra_obstacles.append((round(p.position.x, 3), round(p.position.y, 3)))
+        self.extra_obstacles = self.extra_obstacles[-400:]
+        self.build_clearance()
+
+        x, y, yaw = self.odom[0], self.odom[1], self.odom[2]
+        here = (x, y, yaw)
+        end = steps[self.step][1]
+        points = self.plan_path(here, end)
+        if points is None:
+            self.get_logger().error('No way round the new obstacle; waiting for it to clear.')
+            return
+        self.replans += 1
+        self.get_logger().warn(f'Re-planned step {self.step + 1} around an obstacle not on the map '
+                               f'(re-plan {self.replans}).')
+        self.publish_path(points, here, end)
 
 
     def odomcb(self, data):
@@ -529,7 +584,11 @@ class ebot_planner(Node):
             path.poses.append(pose)
 
         self.path_pub.publish(path)
-        self.path_lengths.append(self.path_length(points))
+        length = self.path_length(points)
+        if len(self.path_lengths) > self.step:          # a re-plan replaces this step's path
+            self.path_lengths[self.step] = length
+        else:
+            self.path_lengths.append(length)
         self.get_logger().info(f'Step {self.step + 1}: published {len(points)} poses, '
                                f'{self.path_lengths[-1]:.2f} m.')
 
@@ -593,7 +652,8 @@ class ebot_planner(Node):
         msg = String()
         msg.data = json.dumps({'step': min(self.step + 1, len(steps)), 'steps': len(steps), 'state': self.state,
                                'path_lengths': [round(d, 3) for d in self.path_lengths],
-                               'package': self.spawned_at is not None})
+                               'package': self.spawned_at is not None, 'replans': self.replans,
+                               'obstacles': self.extra_obstacles[-200:]})
         self.status_pub.publish(msg)
 
 
