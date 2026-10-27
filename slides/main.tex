@@ -274,6 +274,38 @@ Robot 3 & Final planner: 14.48~m vs 14.43~m \\
 \end{frame}
 
 \begin{frame}
+\frametitle{Re-planning around a rock the map does not have}
+\begin{columns}[T]
+\column{0.55\textwidth}
+\includegraphics[width=\textwidth]{dashboard_replan.jpg}
+\column{0.43\textwidth}
+\begin{itemize}
+  \item Planned paths keep $\geq$0.30~m from every mapped rock
+  \item So a lidar return within 0.26~m of the path ahead is \textbf{new}: the eBot stops
+  \item The planner adds it to the map and re-plans from where the eBot stands \alert{in 0.1~s}
+  \item Demo: a surprise rock dropped mid-leg; lap completed, never closer than 1.16~m
+\end{itemize}
+\end{columns}
+\end{frame}
+
+\begin{frame}
+\frametitle{The full mission: haul, hand off, return}
+\begin{columns}[T]
+\column{0.55\textwidth}
+\includegraphics[width=\textwidth]{dashboard_mission.jpg}
+\column{0.43\textwidth}
+\begin{enumerate}
+  \item eBot collects the ore package and drives to the arm
+  \item Arm finds it (odometry + depth, \textbf{4~mm}), picks it: \textbf{2.94~N} = 0.30~kg held
+  \item Lifts it clear of the deck, sets it on the conveyor intake
+  \item eBot drives home
+\end{enumerate}
+\vspace{4pt}
+\footnotesize One click on the dashboard; about 2 minutes end to end.
+\end{columns}
+\end{frame}
+
+\begin{frame}
 \frametitle{What broke, and how we fixed it}
 \small
 \begin{tabular}{@{}L{0.27\textwidth}L{0.66\textwidth}@{}}
@@ -302,14 +334,13 @@ Impure ores & Shape from depth + colour vote, tested on real photos \\
   \item Sorting: 16/16 ores in the right container
   \item Planning: paths as short as the reference
   \item Robust to impure ores: 70\% on real photos
-  \item Every algorithm written from scratch
+  \item Hand-off: eBot to arm to conveyor
+  \item Re-planning around unmapped rocks
 \end{itemize}
 \end{block}
 \column{0.46\textwidth}
 \begin{exampleblock}{Next}
 \begin{itemize}
-  \item Hand ore from the eBot to the arm
-  \item Re-plan around rocks the map misses
   \item Train a classifier on real ore samples
   \item Move to physical robots
 \end{itemize}
