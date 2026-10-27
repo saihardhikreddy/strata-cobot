@@ -12,9 +12,10 @@ Path following: drives the mobile robot along each published path with pure purs
 # Functions:
 #			        wrap_angle, main
 #                   ebot_nav: pathcb, odomcb, scancb, lookup_laser_offset, densify,
+#                             scan_in_map, path_blocked, report_obstacle,
 #                             front_clearance, stop, process_navigation, navigate
 # Nodes:		    ebot_nav_node
-#			        Publishing Topics  - [ /cmd_vel ]
+#			        Publishing Topics  - [ /cmd_vel, /ebot_obstacles ]
 #                   Subscribing Topics - [ /ebot_path, /odom, /scan, /tf, /tf_static ]
 
 
@@ -30,7 +31,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Pose, PoseArray, Twist
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener
@@ -61,6 +62,14 @@ min_turn_rps = 0.15                 # below this the skid-steer base barely turn
 # never stops it or steers it off the path.
 slow_dist_m = 0.60
 body_half_width = 0.245
+
+# Re-planning. Every planned path keeps at least 0.30 m from the rocks on /map, so a lidar
+# return this close to the path ahead is something the map does not have: the chassis
+# (0.245 m half-width) would hit it. The base stops and reports what it sees.
+blocked_dist_m = 0.26
+blocked_ahead_m = 1.6               # how far along the path to look for it
+blocked_cycles = 3                  # consecutive sightings before stopping (lidar noise)
+report_radius_m = 2.5               # lidar points sent to the planner, around the base
 
 
 def wrap_angle(angle):
@@ -119,6 +128,7 @@ class ebot_nav(Node):
         ############ Topic PUBLISHERS ############
 
         self.cmd_pub = self.create_publisher(Twist, cmd_topic, 10)
+        self.obstacle_pub = self.create_publisher(PoseArray, '/ebot_obstacles', 10)   # what blocks the path, in map
 
         ############ Constructor VARIABLES/OBJECTS ############
 
@@ -136,8 +146,10 @@ class ebot_nav(Node):
         self.plan = None                # dense copy of the path, Nx2 array
         self.final_yaw = 0.0            # heading of the path's last pose
         self.progress_idx = 0           # how far along self.plan the base has got
-        self.phase = 'idle'             # idle -> drive -> align -> idle
+        self.phase = 'idle'             # idle -> drive -> align -> idle; drive -> blocked -> drive
         self.paths_done = 0
+        self.blocked_count = 0          # consecutive cycles the path ahead was seen blocked
+        self.last_report = None         # when the obstacle was last reported
 
         self.get_logger().info('Path following node initialised.')
 
@@ -159,6 +171,7 @@ class ebot_nav(Node):
         self.plan = np.array(self.densify(points))
         self.progress_idx = 0
         self.phase = 'drive'
+        self.blocked_count = 0
         self.get_logger().info(f'Path {self.paths_done + 1} received: {len(points)} poses, '
                                f'end ({points[-1][0]:.2f}, {points[-1][1]:.2f}, {self.final_yaw:.2f}).')
 
@@ -248,6 +261,46 @@ class ebot_nav(Node):
         return float(np.min(x[in_corridor]))
 
 
+    def scan_in_map(self):
+        '''The latest lidar returns as points in the map frame (odom coincides with map).'''
+        if self.scan_points is None or self.pose is None or len(self.scan_points) == 0:
+            return np.zeros((0, 2))
+        x, y, yaw = self.pose
+        c, s = math.cos(yaw), math.sin(yaw)
+        px, py = self.scan_points[:, 0], self.scan_points[:, 1]
+        return np.column_stack((x + c * px - s * py, y + s * px + c * py))
+
+
+    def path_blocked(self):
+        '''
+        Description:    True if a lidar return lies within blocked_dist_m of the path over
+                        the next blocked_ahead_m: an obstacle the map does not have.
+        '''
+        pts = self.scan_in_map()
+        if len(pts) == 0:
+            return False
+        ahead = self.plan[self.progress_idx:self.progress_idx + int(blocked_ahead_m / 0.05) + 1]
+        d = np.hypot(pts[:, None, 0] - ahead[None, :, 0], pts[:, None, 1] - ahead[None, :, 1])
+        return bool(d.min() < blocked_dist_m)
+
+
+    def report_obstacle(self):
+        '''Send the lidar returns around the base, in the map frame, to the planner.'''
+        pts = self.scan_in_map()
+        x, y, _ = self.pose
+        near = pts[np.hypot(pts[:, 0] - x, pts[:, 1] - y) < report_radius_m]
+        msg = PoseArray()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        for px, py in near:
+            p = Pose()
+            p.position.x, p.position.y = float(px), float(py)
+            p.orientation.w = 1.0
+            msg.poses.append(p)
+        self.obstacle_pub.publish(msg)
+        self.last_report = self.get_clock().now().nanoseconds
+
+
     def stop(self):
         '''Publish a zero Twist. The base keeps the last command until replaced.'''
         self.cmd_pub.publish(Twist())
@@ -275,6 +328,14 @@ class ebot_nav(Node):
         gx_end, gy_end = self.plan[-1]
         dist_end = math.hypot(gx_end - x, gy_end - y)
 
+        if self.phase == 'blocked':
+            # Wait for the planner's new path (pathcb switches back to drive); remind it
+            # every 2 s in case the report was missed.
+            self.stop()
+            if self.get_clock().now().nanoseconds - self.last_report > 2e9:
+                self.report_obstacle()
+            return
+
         if self.phase == 'drive':
             last = len(self.plan) - 1
             if dist_end < final_tol_m or (self.progress_idx >= last - 1 and dist_end < 0.12):
@@ -288,6 +349,17 @@ class ebot_nav(Node):
             hi = min(last, lo + 40)
             seg = self.plan[lo:hi + 1]
             self.progress_idx = lo + int(np.argmin(np.hypot(seg[:, 0] - x, seg[:, 1] - y)))
+
+            if self.path_blocked():
+                self.blocked_count += 1
+                if self.blocked_count >= blocked_cycles:
+                    self.phase = 'blocked'
+                    self.get_logger().warn('Something not on the map blocks the path. Stopping and asking for a new path.')
+                    self.stop()
+                    self.report_obstacle()
+                    return
+            else:
+                self.blocked_count = 0
 
             look = self.progress_idx
             while look < last and math.hypot(self.plan[look, 0] - x, self.plan[look, 1] - y) < lookahead_m:
