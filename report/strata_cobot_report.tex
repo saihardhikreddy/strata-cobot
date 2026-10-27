@@ -39,7 +39,7 @@ India}
 \maketitle
 
 \begin{abstract}
-This paper presents a robotics course project in which a UR7e manipulator and a four-wheeled mobile robot (eBot) cooperate to sort and haul ore in a Gazebo simulation. The manipulator detects ores with an RGB-D camera, picks each with a magnetic tool and drops it in the container for its mineral. The mobile robot plans its own collision-free paths on an occupancy grid and follows them while collecting an ore package. All perception, inverse kinematics, motion planning and path planning were written from first principles, without ready-made planners such as MoveIt~2 or Nav2. Because real ores are rarely one clean colour, ores are found by their shape in the depth image and classified by a vote over the colours of their whole face: it stays fully correct with half of each ore's coloured face covered by impurities, and recognises 70\% of held-out real mineral photographs against 11\% for tight colour thresholds. The mobile robot also hands the ore package to the arm, and re-plans around obstacles missing from its map. Ore positions are estimated to within 2--3~mm, inverse kinematics plans in 0.1--0.4~s, and planned paths are as short as a reference shortest path. Across repeated trials the manipulator sorted every ore into the correct container and the mobile robot completed every lap, with no collision and no safety stop.
+We describe a course project on cooperative autonomy between two simulated robots in Gazebo: a fixed UR7e arm and a skid-steer ground vehicle, the eBot. The arm looks at a conveyor through a depth camera, lifts every ore block with an electromagnet and deposits it in the bin that matches its mineral. The vehicle computes routes around scattered boulders from a static occupancy map, tracks them, and picks up an ore crate during its circuit. No motion-planning or navigation framework (for example MoveIt~2 or Nav2) is involved; the detector, the kinematic solver, the arm and vehicle planners and both controllers were implemented by the team. Natural ore is seldom uniformly coloured, so blocks are segmented geometrically from depth and labelled by the proportions of mineral hues across the entire top surface. This labelling survives impurities over half of the coloured area and identifies 70\% of unseen photographs of real specimens, compared with 11\% for narrow hue thresholds. The vehicle further delivers its crate to the arm and computes a fresh route when it meets a boulder absent from the map. Localisation error is 2--3~mm, a kinematic solution takes 0.1--0.4~s, and route lengths equal those of a reference shortest route. In every repeated trial all ores reached the right bin and every circuit finished, without collisions or protective stops.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -47,59 +47,59 @@ ROS 2, mobile manipulation, inverse kinematics, A* path planning, pure pursuit, 
 \end{IEEEkeywords}
 
 \section{Introduction}
-The project is set in a mining operation on another planet run by two robots with no human in the loop. A mobile robot crosses rocky terrain to an excavation site, takes on ore and hauls it back to a processing facility. There, a stationary robot arm identifies each ore with a camera and sorts it into one of three containers: azurite (blue), malachite (green) or vanadinite (orange). The simulated world, robots and sensors come from the e-Yantra Strata Cobot environment~\cite{eyantra}.
+The scenario is an off-world mine operated without people. A wheeled vehicle travels across boulder-strewn ground to a dig site, receives ore and brings it back to a processing station. At the station a fixed arm inspects every block with a camera and assigns it to one of three bins: azurite (blue), malachite (green) or vanadinite (orange). The e-Yantra Strata Cobot environment~\cite{eyantra} provides the world model, both robots and their sensors.
 
-The project has two parts. The manipulator must find four ores on a conveyor, pick each with an electromagnet and drop it in the container for its mineral. The mobile robot must drive a three-leg lap between fixed poses through a field of rocks, collecting an ore package on the way, along paths it plans itself. Every planner and controller in this work is our own; no motion planning or navigation library is used.
+Two problems are addressed. First, the arm has to locate four blocks on a conveyor, lift each one magnetically and release it above the correct bin. Second, the vehicle has to complete a circuit of three legs between prescribed poses among boulders, collecting a crate along the way, using routes it computes on its own. We rely on no external planning or navigation package; every planner and controller described here was written for this work.
 
-The contributions of this project are:
+Our contributions are:
 \begin{itemize}
-\item a perception pipeline that finds ores by shape in the depth image and classifies them by a colour vote, robust to impure ores, with 1.7--2.7~mm position error;
-\item a pick-and-place pipeline built on damped least-squares inverse kinematics and resolved-rate control, with force-confirmed picks;
-\item an occupancy-grid planner whose paths match the reference shortest length, and a pure-pursuit follower that tracks them within 0.09~m;
-\item an evaluation of both pipelines over repeated randomised trials.
+\item a depth-based block detector paired with a hue-proportion classifier that tolerates impure ore, localising blocks to 1.7--2.7~mm;
+\item an arm pipeline combining damped least-squares inverse kinematics with resolved-rate descents and force-checked grasps;
+\item a grid planner that achieves the reference shortest length and a pure-pursuit tracker that holds the vehicle within 0.09~m of the route;
+\item repeated randomised trials evaluating both robots.
 \end{itemize}
 
 \section{System Overview}
-The system runs on Ubuntu~24.04 with ROS~2~\cite{macenski2022} Jazzy and Gazebo Harmonic. It consists of four Python nodes, two per robot (Fig.~\ref{fig:arch}). The arm accepts only joint or tool velocity commands, and the mobile robot only velocity twists on \texttt{/cmd\_vel}, so every node closes its own control loop at 20--50~Hz.
+Software runs under Ubuntu~24.04 using ROS~2~\cite{macenski2022} Jazzy and Gazebo Harmonic, split into four Python nodes with two per robot (Fig.~\ref{fig:arch}). Since the arm takes only joint- or Cartesian-velocity commands and the vehicle takes only twists on \texttt{/cmd\_vel}, each node runs its own feedback loop at 20--50~Hz.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{figures/architecture.png}}
-\caption{Node architecture. Feedback topics (\texttt{/tcp\_pose\_raw}, \texttt{/joint\_states}, the tool force and \texttt{/arm\_status} for the arm; \texttt{/odom} for the mobile robot) are omitted for clarity.}
+\caption{How the nodes connect. For readability, feedback topics are left out (\texttt{/tcp\_pose\_raw}, \texttt{/joint\_states}, tool force and \texttt{/arm\_status} on the arm side; \texttt{/odom} on the vehicle side).}
 \label{fig:arch}
 \end{figure}
 
-The arm is a UR7e with an electromagnet on its flange and a RealSense D435i camera fixed to its base, looking down at a conveyor. Its servo caps each joint at 0.60~rad/s and triggers a latching protective stop on joint limits, singularities, collisions and overload. The mobile robot is a skid-steer base with a 2D lidar; a static occupancy grid of the arena is published once on \texttt{/map}.
+An electromagnet is mounted on the UR7e flange, and a RealSense D435i is fixed to the arm base, pointing down at the conveyor. The servo interface limits every joint to 0.60~rad/s and latches a protective stop on joint-limit violations, singularities, contact and overload. The vehicle carries a planar lidar, and a static occupancy grid of the arena arrives once on \texttt{/map}.
 
 \section{Perception}
-Each ore is a $101.6\times101.6\times76.2$~mm block, black except for a coloured top face. A first detector thresholded each mineral's colour tightly in HSV and kept blobs of plausible size and squareness. That works only while every ore shows one clean, saturated colour. Real ore is rarely so pure: veins of other minerals, dark or iron-stained matrix, dust and changing light all break a tight threshold. The final detector therefore separates \emph{where} an ore is from \emph{what} it is.
+The blocks measure $101.6\times101.6\times76.2$~mm and are black apart from a tinted upper face. Our initial detector applied narrow HSV bands per mineral and accepted blobs of suitable area and aspect. It works only while each face shows a single clean, saturated hue. Genuine specimens break such bands through intergrown minerals, dark or rust-coloured host rock, dust and varying illumination. The final design therefore decouples localisation from identification.
 
-\subsection{Finding ores by shape}
-Every pixel $(u,v)$ of the aligned depth image is back-projected with its depth $z$ through the camera intrinsics,
+\subsection{Geometric segmentation}
+For each pixel $(u,v)$ in the depth image registered to colour, with depth $z$, the camera intrinsics give the 3-D point
 \begin{equation}
 \mathbf{p}_c = \left(\frac{(u-c_x)z}{f_x},\ \frac{(v-c_y)z}{f_y},\ z\right), \label{eq:backproj}
 \end{equation}
-and transformed into the arm's \texttt{base\_link} frame. An ore's top face is the only surface on the conveyor 66--86~mm above the belt, so the pixels in that height band, split into connected regions, are the candidate faces; the band also leaves a gap between ores standing close together, where their sides would join up. A region is kept only if a rectangle fitted to its points measures 80--130~mm a side. The face centre is the centre of that rectangle: the median of the points, used at first, was pulled 4--9~mm towards the camera by edge pixels whose depth mixes with the background. Against the simulator's ground truth the centres were 1.7--2.7~mm off.
+which is then expressed in the arm's \texttt{base\_link} frame. Nothing on the conveyor except a block's upper face lies between 66 and 86~mm above the belt, so the points in that slab, grouped into connected components, form the candidates; the slab also keeps adjacent blocks apart, since their side walls fall below it. A component survives only if its fitted rectangle has sides of 80--130~mm, and the rectangle's centre is taken as the block position. An earlier median estimate was biased 4--9~mm towards the camera by boundary pixels whose depth blends with the floor. Compared with simulator ground truth, the final estimates deviate by 1.7--2.7~mm.
 
-\subsection{Classifying by a colour vote}
-Each face is then classified by a vote over all of its pixels. For each mineral we count the share of the face whose hue falls in that mineral's range (blue 95--130, green 40--90, orange-red 0--20 and 170--180 on OpenCV's 0--180 scale), with saturation and value floors that exclude only grey, black and white matrix ($S\ge80$; $V\ge15$ for blue, since real azurite is very dark, and $V\ge40$ for green). Orange is held to higher limits ($S\ge140$, $V\ge100$) so that brown, iron-stained rock does not count as vanadinite. The mineral with the largest share wins if it covers at least 3\% of the face and twice the share of any other colour; otherwise the face is marked \emph{uncertain}. Impurities therefore only lower the winning share instead of breaking the detection. Over the 20 frames observed before naming, faces closer than 5~cm are one ore and its mineral is the majority vote; an ore that never gets a clear vote is reported rather than guessed. Each mineral is numbered from 1, nearest the arm first, and published as a tf2 frame at 10~Hz at the median of its last 30 positions (Fig.~\ref{fig:detect}).
+\subsection{Hue-proportion labelling}
+Identification uses every pixel of the face. For each mineral we compute the fraction of face pixels whose hue lies in its band (blue 95--130, green 40--90, orange-red 0--20 and 170--180, OpenCV scale 0--180), subject to saturation and brightness minima that reject only grey, black and white host rock ($S\ge80$; $V\ge15$ for blue, because natural azurite is very dark; $V\ge40$ for green). Orange must also satisfy $S\ge140$ and $V\ge100$, so rusty brown stone is not mistaken for vanadinite. The leading mineral is accepted when its fraction is at least 3\% and at least double that of every competitor; otherwise the face is labelled \emph{uncertain}. Contamination thus reduces the leading fraction rather than destroying the detection. Across the 20 frames gathered before labelling, faces within 5~cm of each other are merged as one block whose label is the majority result; a block that never obtains a clear result is reported rather than guessed. Blocks of each mineral are numbered from 1 starting nearest the arm and broadcast as tf2 frames at 10~Hz, located at the median of the latest 30 estimates (Fig.~\ref{fig:detect}).
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{figures/detection.png}}
-\caption{RealSense colour frame with four detected ores on the conveyor (right). The cargo rover's three containers are at the left.}
+\caption{Colour image from the RealSense with the four blocks found on the conveyor (right); the three bins on the cargo rover appear at the left.}
 \label{fig:detect}
 \end{figure}
 
-\subsection{Robustness to impure ores}
-The simulated ores are pure, so impurities were painted into a captured camera frame: random blotches of dark rock (40\%), brown matrix (30\%), white quartz (15\%) and veins of the other two minerals (15\%), covering 0--70\% of each ore's coloured area, under random brightness ($\times$0.6--1.3), colour cast ($\pm$8\% per channel) and sensor noise. Fig.~\ref{fig:impurity} shows 40 trials of four ores at each level. The first detector already misses 3\% of clean ores under dim light and finds under half at 20\% impurity. The voting detector classifies every ore correctly up to 50\% impurity and 84\% at 70\%, and never assigns a wrong mineral: what it cannot decide it marks uncertain, so no ore is dropped in the wrong container.
+\subsection{Synthetic contamination}
+Because the simulator's blocks are perfectly clean, contamination was added artificially to a recorded camera image: random patches of dark stone (40\%), brown host rock (30\%), white quartz (15\%) and streaks of the two other minerals (15\%), covering 0--70\% of each tinted face, combined with random brightness scaling ($\times$0.6--1.3), per-channel tint ($\pm$8\%) and noise. Fig.~\ref{fig:impurity} reports 40 trials with four blocks per contamination level. Under dim lighting the narrow-band detector misses 3\% of clean blocks, and at 20\% contamination it recovers fewer than half. The hue-proportion classifier labels all blocks correctly up to 50\% contamination and 84\% of them at 70\%, and never outputs the wrong mineral; undecidable faces are flagged uncertain, so no block is placed in an incorrect bin.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{figures/impurity.png}}
-\caption{Ores correctly found and classified against the share of each ore's coloured face covered by painted impurities, 160 ores per level.}
+\caption{Fraction of blocks located and labelled correctly versus the portion of the tinted face hidden by synthetic contamination (160 blocks per level).}
 \label{fig:impurity}
 \end{figure}
 
-\subsection{Real mineral photographs}
-Painted impurities are still synthetic, so both classifiers were also run on 180 real specimen photographs from Wikimedia Commons~\cite{commons}, 60 each of azurite, malachite and vanadinite, many of them intergrown with other minerals and matrix. A photograph has no depth, so the specimen is separated from its plain backdrop by its colour distance in Lab from the median border colour. The value floors and vote limits above were chosen by a grid search on photos 1--30 of each mineral, maximising correct minus twice wrong, and are reported on the 90 held-out photos (Table~\ref{tab:photos}).
+\subsection{Photographs of real specimens}
+Synthetic patches remain artificial, so both classifiers were also tested on 180 specimen photographs from Wikimedia Commons~\cite{commons}: 60 per mineral, many showing intergrowths and host rock. Lacking depth, each photograph is segmented by Lab colour distance from the median colour of its border. Brightness minima and acceptance ratios were set by grid search over the first 30 images per mineral, maximising correct labels minus twice the wrong ones, and results are given for the remaining 90 (Table~\ref{tab:photos}).
 
 \begin{table}[htbp]
 \caption{Classification of 90 Held-Out Real Photographs}
@@ -123,70 +123,68 @@ Vanadinite & 17\% & 93\% & 0\% & 7\% \\
 \end{center}
 \end{table}
 
-The tight thresholds tuned to clean simulated faces recognise only 11\% of real specimens; the voting detector recognises 70\%. With the limits taken straight from the simulator it reached 57\% with 2\% wrong, so calibration trades a few more mistakes for many fewer uncertain specimens. Azurite remains the hardest: it is a very dark blue, and many azurite specimens are crusted with green malachite, which the two-to-one rule rightly refuses to call. A classifier trained on labelled images, such as a small convolutional network, is the natural next step once real ore samples are available.
-
-
+Narrow bands tuned on clean simulated faces identify 11\% of the real specimens, against 70\% for the hue-proportion classifier. Using the simulator-derived limits unchanged gave 57\% correct with 2\% wrong; calibration therefore accepts a few extra errors in exchange for far fewer uncertain labels. Azurite is the most difficult case: its blue is very dark, and many samples carry a green malachite crust, which the two-to-one criterion correctly declines to resolve. Once physical samples are available, a learned image classifier such as a compact convolutional network would be the logical successor.
 
 \section{Manipulation}
-\subsection{Workspace and containers}
-The container positions are not given. They were extracted by parsing the cargo rover's collision mesh (a GLB file) and transforming its vertices into \texttt{base\_link}. Each container's interior spans 0.40~m in $y$ and 0.26--0.31~m in $x$. The centre of the vanadinite container lies 0.93~m from the arm base, beyond reach with the tool vertical, so each ore is released over the point of its container nearest the arm, 8~cm in from the walls (Fig.~\ref{fig:workspace}).
+\subsection{Workspace and bins}
+Bin locations are not supplied, so they were recovered from the GLB collision model of the rover carrying the bins by mapping its vertices into \texttt{base\_link}. Each bin's opening is 0.40~m long in $y$ and 0.26--0.31~m wide in $x$. The vanadinite bin's centre is 0.93~m from the base, out of reach with a vertical tool, so blocks are released at the point of each bin closest to the arm, 8~cm inside the walls (Fig.~\ref{fig:workspace}).
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=0.92\columnwidth]{figures/workspace.png}}
-\caption{Top view of the arm workspace in \texttt{base\_link}: equipment modelled as boxes for collision checking, ores on the conveyor, and the drop point ($\times$) in each container.}
+\caption{Plan view of the arm's surroundings in \texttt{base\_link}: obstacles represented as collision boxes, blocks on the conveyor, and the release point ($\times$) chosen in every bin.}
 \label{fig:workspace}
 \end{figure}
 
 \subsection{Inverse kinematics}
-The robot model, including a point cloud of each link's collision mesh, is read from \texttt{/robot\_description}. Because the magnet face is a disc, rotation about the vertical is free, and inverse kinematics solves five constraints: the tool position $\mathbf{p}$ and a vertical tool axis $\mathbf{z}$. With error $\mathbf{e} = [\mathbf{p}^{*}-\mathbf{p};\ (\mathbf{z}\times-\hat{\mathbf{k}})_{xy}]$ and the corresponding $5\times6$ rows $J$ of the numerical Jacobian, each iteration applies the damped least-squares step~\cite{wampler1986}
+The kinematic model, together with a sampled point cloud of every link's collision mesh, is parsed from \texttt{/robot\_description}. The magnet is circular, so yaw about the vertical is unconstrained and the solver enforces five conditions: tool position $\mathbf{p}$ and a downward tool axis $\mathbf{z}$. Defining $\mathbf{e} = [\mathbf{p}^{*}-\mathbf{p};\ (\mathbf{z}\times-\hat{\mathbf{k}})_{xy}]$ and taking the matching $5\times6$ rows $J$ of a finite-difference Jacobian, every iteration performs the damped least-squares update~\cite{wampler1986}
 \begin{equation}
 \Delta\mathbf{q} = J^{T}\left(JJ^{T}+\lambda^{2}I\right)^{-1}\mathbf{e},\qquad \lambda=0.02, \label{eq:dls}
 \end{equation}
-clamped to 0.3~rad. A converged solution is accepted only if it lies inside the joint limits with a 0.3~rad margin, keeps the arm 3~cm from every obstacle box, keeps the tool within $1^\circ$ of vertical and keeps the smallest singular value of the Jacobian above 0.04. Each accepted configuration is stored, and the stored configurations nearest a new target are used as extra seeds. Without these seeds, IK started above the containers failed to find its way back to the conveyor. An earlier version used a constrained SLSQP optimiser and took minutes per plan; the solver of~(\ref{eq:dls}) plans in 0.1--0.4~s.
+limited to 0.3~rad per step. A converged configuration is kept only when it respects the joint limits by 0.3~rad, stays 3~cm away from all obstacle boxes, holds the tool within $1^\circ$ of vertical and keeps the minimum singular value of $J$ above 0.04. Accepted configurations are cached, and those closest to a new goal serve as additional starting guesses; without them, solves begun above the bins could not return to the conveyor. A first implementation based on constrained SLSQP needed minutes per plan, whereas~(\ref{eq:dls}) solves in 0.1--0.4~s.
 
-\subsection{Motion and picking}
-Large moves are straight lines in joint space, accepted if the swept configurations keep 2.5~cm of clearance. Otherwise the planner tries a lift--traverse--descend detour at 0.30--0.50~m, then a route through a staging point over open floor. While an ore is carried, its block is added to the collision geometry hanging below the tool. Joint targets are tracked with a proportional controller capped at 0.30~rad/s.
+\subsection{Motion and grasping}
+Long moves interpolate linearly in joint space and are accepted when every intermediate configuration has 2.5~cm of clearance. Failing that, the planner attempts a raise--cross--lower detour at 0.30--0.50~m height, then a path via a staging pose above open floor. A carried block is appended to the collision model beneath the tool. Joint goals are reached by a proportional controller limited to 0.30~rad/s.
 
-The magnet face is an 81~mm disc and the ore face 101.6~mm square, so the tool must arrive within about 10~mm of the face centre and parallel to it. Vertical moves therefore use resolved-rate control~\cite{whitney1969}: a desired tool velocity $\mathbf{v}$, proportional to the position error and capped, and a tilt correction $\boldsymbol{\omega}$ are mapped to joint velocities by $\dot{\mathbf{q}} = J^{+}[\mathbf{v};\boldsymbol{\omega}]$. Each pick hovers 10~cm above the face, switches the magnet on, descends at 4~cm/s and then 1.2~cm/s, and stops at the face or when the contact force exceeds 2.5~N. After lifting, the tool force (tool weight removed) reads about 1.47~N if a 0.15~kg ore is held; below 0.8~N the pick is retried, up to three times. If a protective stop latches, the node unlocks the arm, backs off upward and re-plans the interrupted step.
+With an 81~mm magnet disc and a 101.6~mm square face, the tool must land within roughly 10~mm of the centre and flat on the face. Vertical motions therefore use resolved-rate control~\cite{whitney1969}: a bounded tool velocity $\mathbf{v}$ proportional to position error and a tilt-correcting rate $\boldsymbol{\omega}$ become joint rates through $\dot{\mathbf{q}} = J^{+}[\mathbf{v};\boldsymbol{\omega}]$. For each grasp the tool pauses 10~cm over the face, energises the magnet, moves down at 4~cm/s and then 1.2~cm/s, and halts on reaching the face or when contact force passes 2.5~N. Once raised, the tool force with its own weight subtracted is near 1.47~N when a 0.15~kg block is attached; readings under 0.8~N trigger up to three retries. When a protective stop latches, the node clears it, retreats upwards and replans the step it was executing.
 
 \section{Path Planning and Following}
-\subsection{Problem}
-The mobile robot drives from home $(0,0)$ to the ore drop pose $(6.0,1.9)$, requests the ore package, continues to the arm pose $(0,1.9)$ and returns home. A path is valid if it starts and ends exactly on these poses and crosses no occupied cell; the robot must stay within 0.5~m of it and stop within 0.3~m and 0.15~rad of each pose. Path quality is measured by efficiency,
+\subsection{Task}
+The vehicle travels from home $(0,0)$ to the ore pickup pose $(6.0,1.9)$, requests the crate, proceeds to the arm pose $(0,1.9)$ and goes back home. A route is admissible when it begins and ends precisely at these poses and enters no occupied cell; the vehicle must remain within 0.5~m of it and settle within 0.3~m and 0.15~rad of each pose. Route quality is scored by
 \begin{equation}
 \eta = \min\!\left(1,\ \frac{L_{\text{ref}}}{L_{\text{path}}}\right), \label{eq:eff}
 \end{equation}
-where the reference length $L_{\text{ref}}$ is the shortest path for a 0.395~m circle enclosing the $0.62\times0.49$~m chassis.
+with $L_{\text{ref}}$ the shortest route for a 0.395~m disc that encloses the $0.62\times0.49$~m body.
 
 \subsection{Planner}
-A Euclidean distance transform of the 5~mm \texttt{/map} ($1784\times1380$ cells) gives every cell its clearance to the nearest rock or wall. A 5~cm grid sampled at cell centres is searched by 8-connected A*~\cite{hart1968} over the cells whose clearance meets a chosen level $c$. Near the fixed start and end poses the limit drops to 0.30~m, since the ore drop pose lies only 0.375~m from the arena wall. The A* route is then shortcut, joining each point to the furthest later point visible with clearance $c$, and tightened: each corner is pulled towards the chord between its neighbours, halving the step until both legs still clear. Every straight leg is verified on the full-resolution map at 5~mm spacing. Tightening removes the grid's quantisation, so the path wraps each rock at exactly the clearance asked for (Fig.~\ref{fig:paths}).
+Applying a Euclidean distance transform to the 5~mm \texttt{/map} ($1784\times1380$ cells) yields each cell's distance to the closest boulder or wall. On a 5~cm lattice sampled at cell centres, 8-connected A*~\cite{hart1968} searches the cells whose distance satisfies a clearance level $c$. Close to the fixed start and goal poses this requirement is relaxed to 0.30~m, because the pickup pose sits just 0.375~m from the boundary wall. The A* result is then shortcut, linking each vertex to the farthest subsequent vertex reachable in a straight line at clearance $c$, and tightened, moving every corner towards the segment joining its neighbours and halving the move until both adjacent segments remain clear. All straight segments are confirmed on the full-resolution map every 5~mm. Tightening eliminates lattice artefacts, so each route hugs boulders at precisely the requested clearance (Fig.~\ref{fig:paths}).
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=\columnwidth]{figures/paths.png}}
-\caption{Planned paths for the three legs of the lap. Shaded cells lie within 0.395~m of a rock or wall.}
+\caption{Routes computed for the circuit's three legs; shading marks cells closer than 0.395~m to a boulder or wall.}
 \label{fig:paths}
 \end{figure}
 
-\subsection{Choosing the clearance}
-The reference path treats the robot as a 0.395~m circle, but when driving straight past a rock only its 0.245~m half-width must clear. Fig.~\ref{fig:tradeoff} shows the trade-off on one rock layout: below about 0.40~m the lap length is nearly flat, while above it narrow gaps close and the lap grows by up to 13\%. The planner first plans at 0.395~m to estimate the reference path, then tries levels from 0.40 down to 0.34~m and selects the safest whose length is within 1~cm of that estimate. At 0.38~m the robot keeps 13.5~cm to each side, against a measured tracking error of at most 9~cm.
+\subsection{Selecting the clearance}
+Although the reference models the vehicle as a 0.395~m disc, passing a boulder in a straight line only requires the 0.245~m half-width to clear it. Fig.~\ref{fig:tradeoff} plots this compromise for one layout: up to roughly 0.40~m the circuit length barely changes, but beyond it tight passages close and the circuit lengthens by as much as 13\%. The planner therefore first plans at 0.395~m to approximate the reference, then tests levels from 0.40 down to 0.34~m and keeps the largest one whose length stays within 1~cm of that approximation. At 0.38~m this leaves 13.5~cm on each side, whereas the worst measured tracking error is 9~cm.
 
 \begin{figure}[htbp]
 \centerline{\includegraphics[width=0.92\columnwidth]{figures/tradeoff.png}}
-\caption{Total lap length against the clearance kept from rocks, for one rock layout. No path exists above 0.45~m.}
+\caption{Circuit length as a function of the clearance held from boulders for a single layout; above 0.45~m no route exists.}
 \label{fig:tradeoff}
 \end{figure}
 
-\subsection{Follower}
-The follower is a pure-pursuit controller~\cite{coulter1992} with a 0.30~m lookahead and a 0.35~m/s cruise speed. It turns on the spot when the heading error exceeds $40^\circ$, slows on the approach to the end of the path, then turns to the path's final heading and stops. It drives the published path without re-planning; the lidar only slows it near obstacles. The planner watches \texttt{/odom}, advances to the next leg after the robot has stood still on the end pose for 0.5~s, and at the ore drop pose calls \texttt{/spawn\_ore\_package} asynchronously.
+\subsection{Tracker}
+Route tracking uses pure pursuit~\cite{coulter1992} with 0.30~m lookahead at 0.35~m/s. If heading error exceeds $40^\circ$ the vehicle rotates in place; near the route's end it decelerates, rotates to the final heading and halts. During normal driving the lidar only reduces speed near obstacles. The planner monitors \texttt{/odom}, moves on to the next leg once the vehicle has been stationary on the goal pose for 0.5~s, and calls \texttt{/spawn\_ore\_package} asynchronously at the pickup pose.
 
 \section{Integration: Hand-off and Re-planning}
-\subsection{Hand-off from the mobile robot to the arm}
-To run the whole loop, the arm is spawned into the mobile robot's world. In hand-off mode the planner stops after the second leg, at the arm pose, publishes \texttt{/handoff/ready} and waits. A hand-off node, built on the same arm model, planner and controllers as the sorting node, then takes over. It locates the ore package from the eBot's odometry (which matches the simulator's ground truth to the millimetre), refines its height and, when the whole face is in view, its centre from the depth camera; in testing it was within 4~mm of the truth. The eBot's body is added to the arm's collision boxes. The package ($177.8\times139.7\times76.2$~mm, 0.30~kg) is picked with the magnet and confirmed by the force sensor at 2.94~N, lifted straight up until it clears the deck by 7~cm, carried with its block in the collision model, lowered onto the conveyor intake and released. The node then publishes \texttt{/handoff/done} and the eBot drives home. A full mission takes about 2~minutes.
+\subsection{Crate transfer from vehicle to arm}
+For the complete mission the arm is inserted into the vehicle's world. With transfer enabled, the planner pauses after the second leg at the arm pose, raises \texttt{/handoff/ready} and waits. A transfer node, reusing the sorting node's arm model, planner and controllers, takes control. It predicts the crate's position from the vehicle's odometry (which agrees with simulator ground truth to within a millimetre), then corrects the height and, if the full face is visible, the centre using the depth camera, reaching 4~mm accuracy in tests. The vehicle body is inserted into the arm's collision boxes. The crate ($177.8\times139.7\times76.2$~mm, 0.30~kg) is lifted magnetically, verified by a 2.94~N force reading, raised vertically until 7~cm above the deck, transported with its volume in the collision model, set down on the conveyor's input end and released. The node finally sets \texttt{/handoff/done}, and the vehicle returns home; a complete mission lasts roughly 2~minutes.
 
-\subsection{Re-planning around unmapped obstacles}
-Every planned path keeps at least 0.30~m from the rocks on \texttt{/map}, so a lidar return within 0.26~m of the next 1.6~m of path cannot be a mapped rock; it is also where the 0.245~m half-width chassis would hit it. After three consecutive sightings the follower stops and publishes the lidar points around the robot on \texttt{/ebot\_obstacles}. The planner marks them as occupied, recomputes the distance transform and plans a new path from where the robot stands, in about 0.1~s. In a test where a box was dropped on the path mid-leg, the robot stopped, followed the new path and completed the lap, never coming closer than 1.16~m to the box's centre.
+\subsection{Responding to unmapped obstacles}
+Since every route stays at least 0.30~m from mapped boulders, any lidar point within 0.26~m of the upcoming 1.6~m of route must belong to something unmapped, and is also close enough to strike the 0.245~m half-width body. Following three successive detections, the tracker halts and sends the nearby lidar points on \texttt{/ebot\_obstacles}. The planner inserts them into its occupancy data, recomputes the distance transform and produces a replacement route from the vehicle's current pose in about 0.1~s. In a test where a box was spawned onto the route during a leg, the vehicle halted, drove the replacement route and finished the circuit, keeping at least 1.16~m from the box centre.
 
 \section{Results}
-Each trial used a freshly launched world with randomised ore positions or rock layout, and was assessed by the automated evaluator supplied with the simulation. Table~\ref{tab:results} summarises the trials.
+Every trial began from a newly launched world with random ore placement or boulder layout and was scored by the automatic evaluator bundled with the simulator. Table~\ref{tab:results} lists the outcomes.
 
 \begin{table}[htbp]
 \caption{Trial Results}
@@ -195,29 +193,29 @@ Each trial used a freshly launched world with randomised ore positions or rock l
 \hline
 \textbf{Trial} & \textbf{Outcome} \\
 \hline
-Arm 1 & 4/4 ores detected, picked and dropped in the correct container; 0 safety stops \\
+Arm 1 & All four blocks found, grasped and binned correctly; no protective stops \\
 \hline
-Arm 2 & Different ore mix, one ore 0.83~m from the base: 4/4 sorted correctly in 167~s; 0 safety stops \\
+Arm 2 & New mineral mix with one block 0.83~m from the base: all four binned correctly in 167~s; no protective stops \\
 \hline
 Arm 3 & Voting detector (simulator limits): 4/4 classified in 20/20 frames, sorted correctly; 0 safety stops \\
 \hline
 Arm 4 & Voting detector (calibrated limits), two azurite ores: 4/4 sorted correctly in 180~s; 0 safety stops \\
 \hline
-Robot 1 & First planner: 14.74~m lap vs.\ 14.46~m reference, $\eta=0.98$ \\
+Robot 1 & Initial planner: circuit of 14.74~m against a 14.46~m reference, $\eta=0.98$ \\
 \hline
-Robot 2 & Final planner: 14.55~m vs.\ 14.58~m, $\eta=1.00$ \\
+Robot 2 & Final planner: 14.55~m against 14.58~m, $\eta=1.00$ \\
 \hline
-Robot 3 & Final planner: 14.48~m vs.\ 14.43~m, $\eta=0.996$ \\
+Robot 3 & Final planner: 14.48~m against 14.43~m, $\eta=0.996$ \\
 \hline
 \end{tabular}
 \label{tab:results}
 \end{center}
 \end{table}
 
-All robot trials collected the ore package without a collision, kept the robot within 0.09~m of its paths and stopped within 0.15~m and 0.04~rad of each pose. Every pick was confirmed at 1.46--1.47~N. The small shortfall in trial Robot~3 comes from the reference itself: on the same rock layout the reference length of the second leg measured 6.14~m in one trial and 6.07~m in the next, while the planned path stayed at 6.11~m. Closing that gap reliably would require clearances below 0.34~m, at a real risk of collision.
+In all vehicle trials the crate was collected with no collision, tracking error never exceeded 0.09~m, and the vehicle settled within 0.15~m and 0.04~rad of every pose. All grasps registered 1.46--1.47~N. The slight deficit in trial Robot~3 stems from the reference: for an identical layout, the reference second leg was 6.14~m in one run and 6.07~m in the next, while our route remained 6.11~m. Recovering that margin consistently would need clearances under 0.34~m, with a genuine collision risk.
 
 \section{Challenges and Lessons}
-Table~\ref{tab:issues} summarises the main problems found during testing. Most were invisible until the robots were run end to end and assessed automatically.
+Table~\ref{tab:issues} lists the principal issues encountered; most surfaced only once both robots were exercised end to end under automatic scoring.
 
 \begin{table}[htbp]
 \caption{Main Problems and Fixes}
@@ -241,10 +239,10 @@ Ores never found & tf frame list writes a space after each name. Fixed by a regu
 \end{center}
 \end{table}
 
-Three lessons stand out. Testing end to end against an automatic evaluator early exposed losses that plots did not. Measuring the geometry ourselves revealed both the wall beside the drop pose and the unreachable container centre. And a solver specific to the problem, with checks applied once to its result, was about 300 times faster than a general constrained optimiser.
+We draw three lessons. Early end-to-end runs against an automatic scorer revealed losses that offline plots concealed. Measuring the scene geometry directly uncovered both the wall next to the pickup pose and the out-of-reach bin centre. Finally, a solver tailored to the task, with validity checks run once on its output, proved roughly 300 times faster than a generic constrained optimiser.
 
 \section{Conclusion}
-Both robots complete their missions end to end in simulation, using only planners and controllers written for this project: every ore was sorted correctly and every lap was completed without a collision. The two robots also work together: the mobile robot hands the ore package to the arm, and re-plans around obstacles the map does not contain. Future work includes a classifier trained on real ore samples, faster sorting by blending moves and ordering picks, and a move to physical hardware, where lighting and sensor noise will test the colour thresholds and the force-based pick check.
+In simulation, both robots accomplish their tasks end to end with planners and controllers developed solely for this project: all ores were binned correctly and all circuits completed collision-free. The robots also cooperate, with the vehicle transferring its crate to the arm and rerouting around boulders missing from the map. Planned extensions are a learned classifier trained on physical ore samples, quicker sorting through blended motions and pick ordering, and deployment on real hardware, where illumination and sensor noise will stress the hue limits and the force-based grasp check.
 
 \section*{Acknowledgment}
 We thank e-Yantra, IIT Bombay, for the Strata Cobot simulation environment and its evaluation tools.
