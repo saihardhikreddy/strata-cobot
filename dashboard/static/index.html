@@ -91,6 +91,7 @@
   <div class="controls">
     <button class="primary" id="run-sorting">▶ Run ore sorting</button>
     <button class="primary" id="run-lap">▶ Run mobile robot lap</button>
+    <button class="primary" id="run-mission" title="eBot hauls the ore package to the arm, the arm puts it on the conveyor, the eBot drives home">▶ Run full mission</button>
     <button id="rock" title="Places a rock on the robot's path that the map does not know about">⬛ Drop a surprise rock</button>
     <button class="stop" id="stop">■ Stop</button>
     <label class="check"><input type="checkbox" id="gazebo"> Also open the Gazebo 3D window</label>
@@ -155,6 +156,11 @@
         <h2>Lap progress</h2>
         <ol class="steps" id="lap-steps"></ol>
       </div>
+      <div class="card" id="arm-card" hidden>
+        <h2>The arm · handoff</h2>
+        <img class="feed" id="camera2" alt="Live arm camera">
+        <div class="row" style="margin-top:10px"><div class="step-label" id="arm-step2">Waiting</div><span class="muted" id="force2">—</span></div>
+      </div>
       <div class="card">
         <h2>Mobile robot</h2>
         <div class="stats">
@@ -182,6 +188,8 @@ const ARM_STEPS = {
   to_ore: 'Moving to the ore', align: 'Lining up above it', descend: 'Descending, magnet on', grip: 'Gripping',
   lift: 'Lifting', check: 'Checking the hold', plan_drop: 'Planning the drop', to_bin: 'Carrying to its container',
   release: 'Releasing', recover: 'Recovering from a safety stop', park: 'All done', done: 'All done',
+  wait_ebot: 'Waiting for the eBot', to_pkg: 'Moving to the package', plan_place: 'Planning the place',
+  to_place: 'Carrying to the conveyor', lower: 'Lowering onto the conveyor', retreat: 'Moving clear',
 };
 const POSES = [['Home', 0, 0], ['Ore drop', 6.0, 1.9], ['Arm pose', 0, 1.9]];
 let state = null, view = 'sorting', mapImg = null, mapKey = null, lastMode = null;
@@ -194,6 +202,7 @@ async function post(url, body) {
 }
 $('run-sorting').onclick = async () => { show('sorting'); const r = await post('/api/run', { mode: 'sorting', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
 $('run-lap').onclick = async () => { show('lap'); const r = await post('/api/run', { mode: 'lap', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
+$('run-mission').onclick = async () => { show('lap'); const r = await post('/api/run', { mode: 'mission', gazebo: $('gazebo').checked }); if (!r.ok) alert(r.message); };
 $('stop').onclick = () => post('/api/stop');
 $('rock').onclick = async () => { show('lap'); const r = await post('/api/obstacle'); if (!r.ok) alert(r.message); };
 document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => show(t.dataset.view)));
@@ -218,9 +227,10 @@ function render() {
   $('phase').textContent = run.phase; $('phase').className = 'pill ' + run.phase;
   $('message').textContent = run.message;
   $('elapsed').textContent = run.elapsed ? `${Math.floor(run.elapsed / 60)}:${String(Math.floor(run.elapsed % 60)).padStart(2, '0')}` : '';
-  $('run-sorting').disabled = busy; $('run-lap').disabled = busy;
-  $('rock').disabled = !(run.mode === 'lap' && run.phase === 'running'); $('stop').disabled = !busy && run.phase !== 'done' && run.phase !== 'error';
-  if (run.mode && run.mode !== lastMode) { lastMode = run.mode; show(run.mode); }
+  $('run-sorting').disabled = busy; $('run-lap').disabled = busy; $('run-mission').disabled = busy;
+  $('rock').disabled = !(['lap', 'mission'].includes(run.mode) && run.phase === 'running');
+  $('arm-card').hidden = run.mode !== 'mission'; $('stop').disabled = !busy && run.phase !== 'done' && run.phase !== 'error';
+  if (run.mode && run.mode !== lastMode) { lastMode = run.mode; show(run.mode === 'mission' ? 'lap' : run.mode); }
   const log = $('log'); const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = run.log.length ? run.log.join('\n') : 'The log of the simulator and the robot nodes appears here.';
   if (atEnd) log.scrollTop = log.scrollHeight;
@@ -345,15 +355,23 @@ function renderLapPanel() {
   const items = [
     ['Leg 1: home to the ore drop', 1], ['Collect the ore package', 'pkg'], ['Leg 2: ore drop to the arm pose', 2], ['Leg 3: back home', 3],
   ];
+  if (pl.handoff) items.splice(3, 0, ['Arm lifts the package onto the conveyor', 'hand']);
   $('lap-steps').innerHTML = items.map(([t, k], i) => {
     let cls = '', sub = 'waiting';
-    if (k === 'pkg') {
+    if (k === 'hand') {
+      if (finished || step > 2) { cls = 'done'; sub = 'package on the conveyor'; } else if (step === 2 && st === 'handoff') { cls = 'active'; sub = ARM_STEPS[(state.sorter || {}).state] || 'arm working'; }
+    } else if (k === 'pkg') {
       if (pl.package) { cls = 'done'; sub = 'landed on the robot'; } else if (step === 1 && st === 'package') { cls = 'active'; sub = 'requesting...'; }
-    } else if (finished || step > k || (step === k && st === 'package')) { cls = 'done'; sub = pl.path_lengths && pl.path_lengths[k - 1] != null ? `path ${pl.path_lengths[k - 1].toFixed(2)} m` : 'done'; }
+    } else if (finished || step > k || (step === k && (st === 'package' || st === 'handoff'))) { cls = 'done'; sub = pl.path_lengths && pl.path_lengths[k - 1] != null ? `path ${pl.path_lengths[k - 1].toFixed(2)} m` : 'done'; }
     else if (step === k && st) { cls = 'active'; sub = st === 'plan' ? 'planning...' : st === 'drive' ? `driving${pl.path_lengths && pl.path_lengths[k - 1] ? ` · path ${pl.path_lengths[k - 1].toFixed(2)} m` : ''}` : st; }
-    return `<li class="${cls}"><span class="n">${cls === 'done' ? '✓' : k === 'pkg' ? '◆' : k}</span><div><div class="t">${t}</div><div class="s">${sub}</div></div></li>`;
+    return `<li class="${cls}"><span class="n">${cls === 'done' ? '✓' : k === 'pkg' ? '◆' : k === 'hand' ? '⇄' : k}</span><div><div class="t">${t}</div><div class="s">${sub}</div></div></li>`;
   }).join('');
   $('speed').textContent = o ? o.v.toFixed(2) : '—';
+  if (state.run.mode === 'mission') {
+    if (!$('camera2').src) $('camera2').src = '/camera.mjpg';
+    const so = state.sorter || {}; $('arm-step2').textContent = ARM_STEPS[so.state] || 'Starting up';
+    const f = state.force; $('force2').textContent = f.length ? `${f[f.length - 1].toFixed(2)} N` : '—';
+  }
   let d = 0; const tr = state.trail; for (let i = 1; i < tr.length; i++) d += Math.hypot(tr[i][0] - tr[i - 1][0], tr[i][1] - tr[i - 1][1]);
   $('driven').textContent = tr.length ? d.toFixed(1) : '—';
   $('replans').textContent = pl.replans != null ? pl.replans : '—';
