@@ -16,8 +16,8 @@ Path planning: plans a collision-free path on /map for each leg of the lap and s
 #                                 publish_path, request_ore_package, spawn_done,
 #                                 at_pose, process_planning
 # Nodes:		    ebot_planner_node
-#			        Publishing Topics  - [ /ebot_path, /path_planning/status ]
-#                   Subscribing Topics - [ /map, /odom, /ebot_obstacles ]
+#			        Publishing Topics  - [ /ebot_path, /path_planning/status, /handoff/ready ]
+#                   Subscribing Topics - [ /map, /odom, /ebot_obstacles, /handoff/done ]
 #                   Service Clients    - [ /spawn_ore_package ]
 
 
@@ -37,7 +37,7 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDur
 from geometry_msgs.msg import PoseArray, PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from std_srvs.srv import Trigger
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 
 ##################### TASK CONSTANTS #######################
@@ -167,6 +167,14 @@ class ebot_planner(Node):
         # Obstacles the map does not have, reported by the follower when one blocks its path.
         self.obstacle_sub = self.create_subscription(PoseArray, '/ebot_obstacles', self.obstaclecb, 10)
 
+        # Handoff mode (ROS parameter `handoff`, default off): at the arm pose the eBot waits
+        # while the arm lifts the ore package off it. /handoff/ready says it is in place;
+        # the arm answers on /handoff/done once the package is off.
+        self.handoff = self.declare_parameter('handoff', False).value
+        self.handoff_ready_pub = self.create_publisher(Bool, '/handoff/ready', latched)
+        self.handoff_done = False
+        self.create_subscription(Bool, '/handoff/done', self.handoffcb, latched)
+
         ############ Topic PUBLISHERS ############
 
         self.path_pub = self.create_publisher(Path, path_topic, latched)                # the follower drives what is published here
@@ -192,6 +200,7 @@ class ebot_planner(Node):
         self.path_lengths = []          # length of each published path, for the log
         self.extra_obstacles = []       # [(x, y)] reported by the follower, added to the map
         self.replans = 0
+        self.handoff_since = None
 
         self.get_logger().info('Path planning node initialised.')
 
@@ -279,6 +288,11 @@ class ebot_planner(Node):
         self.get_logger().warn(f'Re-planned step {self.step + 1} around an obstacle not on the map '
                                f'(re-plan {self.replans}).')
         self.publish_path(points, here, end)
+
+
+    def handoffcb(self, data):
+        '''The arm reports whether it has taken the ore package off the eBot.'''
+        self.handoff_done = bool(data.data)
 
 
     def odomcb(self, data):
@@ -652,7 +666,7 @@ class ebot_planner(Node):
         msg = String()
         msg.data = json.dumps({'step': min(self.step + 1, len(steps)), 'steps': len(steps), 'state': self.state,
                                'path_lengths': [round(d, 3) for d in self.path_lengths],
-                               'package': self.spawned_at is not None, 'replans': self.replans,
+                               'package': self.spawned_at is not None, 'replans': self.replans, 'handoff': self.handoff,
                                'obstacles': self.extra_obstacles[-200:]})
         self.status_pub.publish(msg)
 
@@ -689,7 +703,21 @@ class ebot_planner(Node):
             if (now - self.still_since).nanoseconds * 1e-9 < settle_time:
                 return
             self.get_logger().info(f'Step {self.step + 1} complete.')
-            self.state = 'package' if self.step == 0 else 'next'
+            if self.step == 0:
+                self.state = 'package'
+            elif self.step == 1 and self.handoff:
+                self.state = 'handoff'
+                self.handoff_ready_pub.publish(Bool(data=True))
+                self.get_logger().info('At the arm pose: waiting for the arm to take the ore package.')
+            else:
+                self.state = 'next'
+
+        if self.state == 'handoff':
+            if not self.handoff_done:
+                return
+            self.handoff_ready_pub.publish(Bool(data=False))
+            self.get_logger().info('The arm has the package. Heading home.')
+            self.state = 'next'
 
         if self.state == 'package':
             if self.spawned_at is None:
