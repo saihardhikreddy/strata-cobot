@@ -134,31 +134,39 @@ pres.addSection({ title: 'Introduction' });
 // 4. Architecture
 {
   const s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Introduction' });
-  s.addText('Four nodes, two sense-plan-act pipelines', { placeholder: 'title' });
+  s.addText('Five nodes, two sense-plan-act pipelines and a hand-off', { placeholder: 'title' });
   const box = (x, y, w, h, title, lines, name, accent) => {
     s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.08, fill: { color: accent ? 'FBEDE6' : HEX.lt1 }, line: { color: accent ? HEX.accent1 : HEX.accent5, width: accent ? 1.75 : 1 }, objectName: name });
-    txt(s, title, { x: x + 0.2, y: y + 0.15, w: w - 0.4, h: 0.4, fontSize: 16, bold: true });
-    txt(s, lines.map((l, i) => ({ text: l, options: { breakLine: i < lines.length - 1 } })), { x: x + 0.2, y: y + 0.6, w: w - 0.4, h: h - 0.7, fontSize: 13, color: C.text2 });
+    txt(s, title, { x: x + 0.2, y: y + 0.12, w: w - 0.4, h: 0.35, fontSize: 16, bold: true });
+    txt(s, lines.map((l, i) => ({ text: l, options: { breakLine: i < lines.length - 1 } })), { x: x + 0.2, y: y + 0.5, w: w - 0.4, h: h - 0.55, fontSize: 12.5, color: C.text2 });
   };
-  box(0.6, 1.5, 2.6, 5.2, 'Gazebo Harmonic', ['UR7e arm + magnet', 'RealSense D435i', 'eBot + lidar', 'rocks and /map', '', 'ROS 2 Jazzy bridge'], 'node-sim');
-  txt(s, 'Manipulator', { x: 4.4, y: 1.45, w: 3, h: 0.3, fontSize: 13, color: C.accent5 });
-  box(4.4, 1.8, 3.4, 1.7, 'ore_perception', ['HSV face detection', 'depth back-projection', 'median per ore'], 'node-perception');
-  box(9.1, 1.8, 3.6, 1.7, 'arm_manipulation', ['damped least-squares IK', 'collision-checked routes', 'force-checked picks'], 'node-manipulation', true);
-  txt(s, 'Mobile robot', { x: 4.4, y: 4.15, w: 3, h: 0.3, fontSize: 13, color: C.accent5 });
-  box(4.4, 4.5, 3.4, 1.7, 'path_planning', ['clearance map', 'A*, shortcut, tighten', 'lap sequencing'], 'node-planning', true);
-  box(9.1, 4.5, 3.6, 1.7, 'path_following', ['pure pursuit', 'turn to final heading', 'stop on the pose'], 'node-navigation');
-  arrow(s, 3.2, 2.3, 1.2, 0, 'a-rgbd'); txt(s, 'RGB-D images', { x: 3.25, y: 1.95, w: 1.15, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
-  arrow(s, 7.8, 2.3, 1.3, 0, 'a-tf'); txt(s, '/tf ore frames', { x: 7.8, y: 1.95, w: 1.3, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
-  arrow(s, 3.2, 5.0, 1.2, 0, 'a-map'); txt(s, '/map, /odom', { x: 3.25, y: 4.65, w: 1.15, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
-  arrow(s, 7.8, 5.0, 1.3, 0, 'a-path'); txt(s, '/ebot_path', { x: 7.8, y: 4.65, w: 1.3, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  box(0.6, 1.5, 2.6, 4.9, 'Gazebo Harmonic', ['UR7e arm + magnet', 'RealSense D435i', 'eBot + lidar', 'rocks and /map', '', 'ROS 2 Jazzy bridge'], 'node-sim');
+  txt(s, 'Manipulator', { x: 4.4, y: 1.4, w: 3, h: 0.3, fontSize: 13, color: C.accent5 });
+  box(4.4, 1.75, 3.4, 1.45, 'ore_perception', ['find each ore by depth and shape', 'name it by a colour vote', 'tf frame per ore'], 'node-perception');
+  box(9.1, 1.75, 3.6, 1.45, 'arm_manipulation', ['damped least-squares IK', 'collision-checked routes', 'force-checked picks'], 'node-manipulation', true);
+  box(9.1, 3.75, 3.6, 0.95, 'package_handoff', ['lifts the package off the eBot onto the conveyor'], 'node-handoff');
+  txt(s, 'Mobile robot', { x: 4.4, y: 4.6, w: 3, h: 0.3, fontSize: 13, color: C.accent5 });
+  box(4.4, 4.95, 3.4, 1.45, 'path_planning', ['clearance map', 'A*, shortcut, tighten', 'lap sequencing, re-planning'], 'node-planning', true);
+  box(9.1, 4.95, 3.6, 1.45, 'path_following', ['pure pursuit', 'turn to final heading', 'stops on unmapped obstacles'], 'node-navigation');
+  arrow(s, 3.2, 2.25, 1.2, 0, 'a-rgbd'); txt(s, 'RGB-D images', { x: 3.25, y: 1.9, w: 1.15, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  arrow(s, 7.8, 2.25, 1.3, 0, 'a-tf'); txt(s, '/tf ore frames', { x: 7.8, y: 1.9, w: 1.3, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  arrow(s, 3.2, 5.4, 1.2, 0, 'a-map'); txt(s, '/map, /odom', { x: 3.25, y: 5.05, w: 1.15, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  arrow(s, 7.8, 5.4, 1.3, 0, 'a-path'); txt(s, '/ebot_path', { x: 7.8, y: 5.05, w: 1.3, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  // lidar obstacles reported back to the planner
+  s.addShape(pres.shapes.LINE, { x: 7.8, y: 5.95, w: 1.3, h: 0, line: { color: HEX.accent5, width: 1.5, beginArrowType: 'triangle' }, objectName: 'a-obstacles' });
+  txt(s, '/ebot_obstacles', { x: 7.8, y: 6.0, w: 1.3, h: 0.3, fontSize: 11, color: C.text2, align: 'center' });
+  // the hand-off between the eBot's planner and the arm
+  s.addShape(pres.shapes.LINE, { x: 6.1, y: 4.25, w: 0, h: 0.7, line: { color: HEX.accent1, width: 1.5, endArrowType: 'triangle' }, objectName: 'h-1' });
+  s.addShape(pres.shapes.LINE, { x: 6.1, y: 4.25, w: 3.0, h: 0, line: { color: HEX.accent1, width: 1.5, endArrowType: 'triangle' }, objectName: 'h-2' });
+  txt(s, '/handoff/ready  ⇄  /handoff/done', { x: 6.2, y: 3.92, w: 2.9, h: 0.3, fontSize: 11, color: C.accent1 });
   // returns to the simulation
-  s.addShape(pres.shapes.LINE, { x: 10.9, y: 3.5, w: 0, h: 0.35, line: { color: HEX.accent5, width: 1.5 }, objectName: 'r-arm-1' });
-  arrow(s, 3.2, 3.85, 7.7, 0, 'r-arm-2');
-  txt(s, '/delta_joint_cmds, /magnet', { x: 4.4, y: 3.55, w: 3.4, h: 0.3, fontSize: 11, color: C.text2 });
-  s.addShape(pres.shapes.LINE, { x: 10.9, y: 6.2, w: 0, h: 0.35, line: { color: HEX.accent5, width: 1.5 }, objectName: 'r-ebot-1' });
-  arrow(s, 3.2, 6.55, 7.7, 0, 'r-ebot-2');
-  txt(s, '/cmd_vel  ·  /spawn_ore_package', { x: 4.4, y: 6.6, w: 4.5, h: 0.3, fontSize: 11, color: C.text2 });
-  s.addNotes('Two Python nodes per robot. Note the arrows into the simulation: the arm accepts only velocity commands and the eBot only velocity twists, so every node closes its own control loop at 20 to 50 Hz. The two highlighted nodes hold most of the algorithmic work.');
+  s.addShape(pres.shapes.LINE, { x: 10.9, y: 3.2, w: 0, h: 0.3, line: { color: HEX.accent5, width: 1.5 }, objectName: 'r-arm-1' });
+  s.addShape(pres.shapes.LINE, { x: 3.2, y: 3.5, w: 7.7, h: 0, line: { color: HEX.accent5, width: 1.5, beginArrowType: 'triangle' }, objectName: 'r-arm-2' });
+  txt(s, '/delta_joint_cmds, /magnet', { x: 3.4, y: 3.55, w: 2.6, h: 0.3, fontSize: 11, color: C.text2 });
+  s.addShape(pres.shapes.LINE, { x: 10.9, y: 6.4, w: 0, h: 0.3, line: { color: HEX.accent5, width: 1.5 }, objectName: 'r-ebot-1' });
+  s.addShape(pres.shapes.LINE, { x: 3.2, y: 6.7, w: 7.7, h: 0, line: { color: HEX.accent5, width: 1.5, beginArrowType: 'triangle' }, objectName: 'r-ebot-2' });
+  txt(s, '/cmd_vel  ·  /spawn_ore_package', { x: 4.4, y: 6.72, w: 4.5, h: 0.3, fontSize: 11, color: C.text2 });
+  s.addNotes('Two Python nodes per robot, plus package_handoff, which extends the arm node for the full mission: the planner says the eBot is in place on /handoff/ready, the arm lifts the package onto the conveyor and answers on /handoff/done. The follower reports anything its lidar sees that the map lacks on /ebot_obstacles, and the planner re-plans. The arm accepts only velocity commands and the eBot only velocity twists, so every node closes its own control loop at 20 to 50 Hz. The two highlighted nodes hold most of the algorithmic work.');
 }
 
 // ================= Manipulator =================
@@ -399,7 +407,7 @@ pres.addSection({ title: 'Results' });
   txt(s, next.map((n, i) => ({ text: n, options: { bullet: true, breakLine: i < next.length - 1 } })),
     { x: 7.4, y: 2.6, w: 5.2, h: 2.8, fontSize: 18, color: C.background2, paraSpaceAfter: 10 });
   txt(s, 'Thank you  ·  Questions?', { x: 0.7, y: 6.2, w: 11.9, h: 0.6, fontSize: 20, bold: true, color: C.background1 });
-  s.addNotes('To sum up: both halves of the mission work end to end in simulation, using only algorithms we wrote. The natural next step is the handoff, where the eBot delivers ore to the arm. Happy to take questions, and we can run a live demo.');
+  s.addNotes('To sum up: both halves of the mission work end to end in simulation, using only algorithms we wrote. The two robots also work together: the eBot delivers the ore package to the arm, which lifts it onto the conveyor, and the eBot re-plans around rocks it did not expect. The natural next steps are a classifier trained on real ore samples and physical robots. Happy to take questions, and we can run a live demo.');
 }
 
 pres.writeFile({ fileName: OUT }).then(async () => {
