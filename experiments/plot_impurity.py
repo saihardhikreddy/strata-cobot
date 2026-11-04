@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-rows = list(csv.DictReader(open(os.path.join(HERE, 'results', 'impurity_robustness.csv'))))
+with open(os.path.join(HERE, 'results', 'impurity_robustness.csv'), newline='') as f:
+    rows = list(csv.DictReader(f))
 series = {m: [(float(r['impurity']) * 100, float(r['correct']) * 100, float(r['wrong']) * 100)
               for r in rows if r['method'] == m] for m in ('baseline', 'voting')}
 

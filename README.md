@@ -54,6 +54,7 @@ Reproduce with the scripts in [`experiments/`](experiments/) (ROS 2 sourced):
 
 ```bash
 python3 experiments/impurity_robustness.py     # painted impurities on a captured camera frame
+python3 experiments/plot_impurity.py           # redraw docs/images/impurity_robustness.png from the CSV
 python3 experiments/fetch_commons_photos.py    # 180 real photos + licence manifest
 python3 experiments/calibrate_colour.py        # tune on 90 photos, test on the other 90
 python3 experiments/real_mineral_photos.py     # first detector vs colour vote
