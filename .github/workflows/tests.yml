@@ -8,6 +8,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # ROS 2 is stubbed out in the tests, so only the planner's own dependencies are needed.
-      - run: pip install numpy opencv-python-headless pytest
+      # ROS 2 is stubbed out in the tests, so only the nodes' own dependencies are needed.
+      - run: pip install numpy scipy opencv-python-headless pytest ruff
+      - run: ruff check --select E9,F tests
       - run: python -m pytest -q tests

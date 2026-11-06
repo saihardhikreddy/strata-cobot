@@ -5,7 +5,6 @@ stand-ins here, since these tests only call the pure grid and search methods.
 """
 import math
 import sys
-import types
 from pathlib import Path
 from unittest import mock
 
