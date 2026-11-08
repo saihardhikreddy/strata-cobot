@@ -211,6 +211,10 @@ class ArmModel:
                 name = j.get('name')
                 axis = j.find('axis')
                 axis = np.array([float(v) for v in axis.get('xyz').split()]) if axis is not None else None
+                if axis is not None:
+                    # URDF only says the axis "should" be normalized; axis_rotation needs a unit vector,
+                    # or a joint like xyz="0 0 2" would scale its link instead of just turning it.
+                    axis = axis / np.linalg.norm(axis)
                 idx = joint_names.index(name) if name in joint_names else None
                 child = j.find('child').get('link')
                 self.tree.append((parent, child, origin_matrix(j.find('origin')), axis, idx))
