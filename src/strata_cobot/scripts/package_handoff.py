@@ -178,9 +178,15 @@ class package_handoff(A.ore_sorter):
 
     def add_ebot_obstacle(self, deck_top):
         '''Add the eBot, up to just under the package, to the arm's collision boxes.'''
-        x, y, _ = self.ebot
-        lo = np.array([x - ebot_half[0], y - ebot_half[0], ebot_ground_z])
-        hi = np.array([x + ebot_half[0], y + ebot_half[0], deck_top - 0.005])
+        x, y, yaw = self.ebot
+        # The boxes are axis-aligned, so take the chassis rectangle's bounding box at this yaw.
+        # (Using the long half-length on both axes left the corners out when the eBot stood
+        # at an angle: at 45 degrees they stick out 0.44 m, not 0.34 m.)
+        c, s = abs(math.cos(yaw)), abs(math.sin(yaw))
+        half_x = c * ebot_half[0] + s * ebot_half[1]
+        half_y = s * ebot_half[0] + c * ebot_half[1]
+        lo = np.array([x - half_x, y - half_y, ebot_ground_z])
+        hi = np.array([x + half_x, y + half_y, deck_top - 0.005])
         self.model.box_lo = np.vstack((self.model.box_lo, lo))
         self.model.box_hi = np.vstack((self.model.box_hi, hi))
 
