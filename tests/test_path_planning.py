@@ -67,3 +67,50 @@ def test_astar_reports_no_route():
 def test_path_length():
     p = planner(np.ones((2, 2)))
     assert p.path_length([(0, 0), (3, 4), (3, 5)]) == pytest.approx(6.0)
+
+
+def mapped_planner(occupied, res=0.05):
+    """A planner whose clearance maps are built from an occupancy array, as mapcb does."""
+    p = object.__new__(pp.ebot_planner)
+    p.occupied = np.asarray(occupied, dtype=bool)
+    h, w = p.occupied.shape
+    p.map_info = mock.Mock(resolution=res, height=h, width=w,
+                           origin=mock.Mock(position=mock.Mock(x=0.0, y=0.0)))
+    p.build_clearance()
+    return p
+
+
+def test_clearance_maps_measure_distance_to_rocks_and_the_map_edge():
+    occupied = np.zeros((80, 120), dtype=bool)
+    occupied[30:50, 50:70] = True                     # a 1 m x 1 m rock
+    p = mapped_planner(occupied)
+    fine, res = p.fine
+    assert fine[40, 30] == pytest.approx(20 * res, abs=res)    # 20 cells left of the rock
+    assert fine[5, 100] == pytest.approx(5 * res, abs=res)     # 5 cells above the map edge
+    assert fine[40, 60] == 0.0                                 # inside the rock
+    assert p.grid[3] == pytest.approx(pp.plan_res, rel=0.5)
+
+
+def test_shortcut_and_tighten_keep_clearance_round_a_rock():
+    occupied = np.zeros((80, 120), dtype=bool)
+    occupied[25:55, 55:65] = True                     # a rock across the straight line
+    p = mapped_planner(occupied)
+    start, goal = (0.6, 2.0), (5.4, 2.0)              # (x, y) in metres, either side of the rock
+    hard = 0.35
+    route = p.astar(p.to_cell(*start), p.to_cell(*goal), hard)
+    assert route is not None
+    points = [start] + [p.to_point(r, c) for r, c in route[1:-1]] + [goal]
+    short = p.shortcut(points, hard)
+    assert short[0] == start and short[-1] == goal and len(short) < len(points)
+    need = p.leg_need(start, goal, hard)
+    tight = p.tighten(short, need)
+    for a, b in zip(tight[:-1], tight[1:]):
+        assert p.segment_clearance(a, b) >= need(a, b) - 1e-6  # the maps are float32
+    assert p.path_length(tight) <= p.path_length(short) + 1e-9
+    assert not p.segment_clear(start, goal, hard)      # the straight line really is blocked
+
+
+def test_shortcut_on_open_ground_is_one_straight_leg():
+    p = mapped_planner(np.zeros((60, 60), dtype=bool))
+    points = [(0.8, 0.8), (1.0, 1.1), (1.3, 1.2), (1.6, 1.5), (2.2, 2.2)]
+    assert p.shortcut(points, 0.3) == [(0.8, 0.8), (2.2, 2.2)]
