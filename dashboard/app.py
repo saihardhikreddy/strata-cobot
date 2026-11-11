@@ -416,8 +416,14 @@ def make_handler(node, runner):
 
         def do_POST(self):
             path = urlparse(self.path).path
-            n = int(self.headers.get('Content-Length') or 0)
-            body = json.loads(self.rfile.read(n) or b'{}')
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+                body = json.loads(self.rfile.read(n) or b'{}')
+            except ValueError:
+                body = None
+            if not isinstance(body, dict):
+                # Bad JSON used to raise here, so the request got no answer at all.
+                return self.send(400, b'{"ok": false, "message": "expected a JSON object"}', 'application/json')
             if path == '/api/run':
                 mode = body.get('mode')
                 if mode not in MISSIONS:
@@ -425,7 +431,10 @@ def make_handler(node, runner):
                 ok, msg = runner.start(mode, bool(body.get('gazebo')))
                 return self.send(200, json.dumps({'ok': ok, 'message': msg}).encode(), 'application/json')
             if path == '/api/obstacle':
-                ok, msg = drop_rock(node, runner)
+                try:
+                    ok, msg = drop_rock(node, runner)
+                except (OSError, subprocess.SubprocessError) as e:  # no gz on PATH, or it hung
+                    ok, msg = False, f'Could not reach Gazebo: {e}'
                 return self.send(200, json.dumps({'ok': ok, 'message': msg}).encode(), 'application/json')
             if path == '/api/stop':
                 threading.Thread(target=runner.stop, daemon=True).start()
@@ -434,7 +443,8 @@ def make_handler(node, runner):
 
         def static(self, name):
             full = os.path.normpath(os.path.join(STATIC, name))
-            if not full.startswith(STATIC) or not os.path.isfile(full):
+            # STATIC + separator: a bare prefix check also let '../static_old/x' through.
+            if not full.startswith(STATIC + os.sep) or not os.path.isfile(full):
                 return self.send(404, b'not found', 'text/plain')
             ctype = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
                      '.svg': 'image/svg+xml', '.png': 'image/png'}.get(os.path.splitext(full)[1], 'application/octet-stream')
