@@ -368,7 +368,8 @@ class ore_tf(Node):
         Description:    Fix the ore names from the detections gathered so far. Detections
                         closer than same_ore_m are one ore, whatever their colour; its
                         mineral is the majority vote of its frames. Each mineral is then
-                        numbered from 1, nearest the arm base first.
+                        numbered from 1, nearest the arm base first. If no ore
+                        was seen, the names are not fixed and naming starts over.
         '''
         groups = []                                     # [[(mineral, position)]]
         for mineral, p in self.candidates:
@@ -393,6 +394,15 @@ class ore_tf(Node):
             mineral, count = votes.most_common(1)[0]
             by_mineral.setdefault(mineral, []).append([q for _, q in g])
             self.get_logger().info(f'Ore classified as {mineral} in {count} of {len(g)} frames.')
+
+        if not by_mineral:
+            # Nothing on the belt yet (the camera came up before the ores, or the first frames
+            # were blocked). Fixing the names now would leave the node with no ores for good,
+            # since track_ores only follows ores that were named, so watch again instead.
+            self.get_logger().warn(f'No ore found in {self.frames_seen} frames; watching again.')
+            self.candidates.clear()
+            self.frames_seen = 0
+            return
 
         for mineral, ores in by_mineral.items():
             ores.sort(key=lambda g: float(np.linalg.norm(np.median(g, axis=0)[:2])))

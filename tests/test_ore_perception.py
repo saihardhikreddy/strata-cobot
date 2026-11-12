@@ -78,3 +78,53 @@ def test_classify_face_is_uncertain_on_a_tie_or_plain_rock():
 def test_brown_rock_is_not_vanadinite():
     brown = (12, 120, 90)  # hue of orange, but too dull and dark
     assert op.colour_shares(*hsv_face([brown]))["vanadinite_ore"] == 0.0
+
+
+class _Log:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg):
+        self.lines.append(msg)
+
+    warn = info
+
+
+class _Naming:
+    """Just the state name_ores() reads and writes, without a ROS node."""
+
+    def __init__(self, candidates):
+        self.candidates = list(candidates)
+        self.frames_seen = op.naming_frames
+        self.history = {}
+        self.named = False
+        self.log = _Log()
+
+    def get_logger(self):
+        return self.log
+
+
+def test_naming_starts_over_when_no_ore_was_seen():
+    node = _Naming([])
+    op.ore_tf.name_ores(node)
+    assert not node.named and node.frames_seen == 0 and node.candidates == []
+    assert 'watching again' in node.log.lines[-1]
+
+
+def test_naming_ignores_a_region_seen_in_too_few_frames():
+    stray = [('azurite_ore', np.array([0.5, 0.1, 0.9]))] * 2
+    node = _Naming(stray)
+    op.ore_tf.name_ores(node)
+    assert not node.named and node.history == {}
+
+
+def test_naming_numbers_each_mineral_nearest_the_base_first():
+    far, near = np.array([0.6, 0.0, 0.9]), np.array([0.3, 0.0, 0.9])
+    green = np.array([0.4, 0.3, 0.9])
+    frames = [('azurite_ore', far), ('azurite_ore', near), ('malachite_ore', green)] * 10
+    node = _Naming(frames)
+    op.ore_tf.name_ores(node)
+    assert node.named
+    assert sorted(node.history) == ['azurite_ore_1', 'azurite_ore_2', 'malachite_ore_1']
+    assert np.allclose(node.history['azurite_ore_1'][0], near)
+    assert np.allclose(node.history['azurite_ore_2'][0], far)
