@@ -279,7 +279,11 @@ class ebot_nav(Node):
         pts = self.scan_in_map()
         if len(pts) == 0:
             return False
-        ahead = self.plan[self.progress_idx:self.progress_idx + int(blocked_ahead_m / 0.05) + 1]
+        # Measured along the path, not by counting points: densify() spaces points anywhere from
+        # under 5 cm (short legs) to almost 10 cm, so a fixed count looked 1 m or 3 m ahead.
+        rest = self.plan[self.progress_idx:]
+        along = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(rest, axis=0).T))))
+        ahead = rest[along <= blocked_ahead_m]
         d = np.hypot(pts[:, None, 0] - ahead[None, :, 0], pts[:, None, 1] - ahead[None, :, 1])
         return bool(d.min() < blocked_dist_m)
 

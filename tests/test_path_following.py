@@ -50,3 +50,14 @@ def test_path_blocked_by_a_return_on_the_path_ahead_only():
     assert on_path.path_blocked()
     assert not off_path.path_blocked()
     assert not too_far.path_blocked()  # beyond blocked_ahead_m along the path
+
+
+@pytest.mark.parametrize("leg", [0.03, 0.09])
+def test_path_blocked_looks_the_same_distance_ahead_whatever_the_point_spacing(leg):
+    # A planner path of many short legs: densify keeps each leg as one step, so the points are
+    # `leg` apart. Looking a fixed number of points ahead covered 1.0 m (3 cm legs) or 2.9 m (9 cm).
+    legs = [(k * leg, 0.0) for k in range(int(4.0 / leg) + 1)]
+    plan = np.array(follower().densify(legs))
+    for x, expected in [(1.4, True), (1.9, False)]:
+        nav = follower(plan=plan, progress_idx=0, pose=(0.0, 0.0, 0.0), scan_points=np.array([[x, 0.0]]))
+        assert nav.path_blocked() is expected, (leg, x)
