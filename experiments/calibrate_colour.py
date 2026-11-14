@@ -15,7 +15,6 @@ Prints the chosen values and the held-out accuracy; writes
 experiments/results/colour_calibration.csv.
 '''
 import csv
-import glob
 import importlib.util
 import itertools
 import os
@@ -35,17 +34,15 @@ def load(name, path):
 
 P = load('ore_perception', os.path.join(ROOT, 'src/strata_cobot/scripts/ore_perception.py'))
 R = load('real_mineral_photos', os.path.join(HERE, 'real_mineral_photos.py'))
-CLASSES = ('azurite_ore', 'malachite_ore', 'vanadinite_ore')
+CLASSES = R.CLASSES
 
 
 def photos(split):
     out = []
-    for cls in CLASSES:
-        for f in sorted(glob.glob(os.path.join(HERE, 'mineral_photos', cls, '*.jpg'))):
-            n = int(os.path.basename(f)[:3])
-            if (split == 'calibration') == (n < 30):
-                bgr = cv2.imread(f)
-                out.append((cls, cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV), R.specimen_mask(bgr)))
+    for cls, f, bgr in R.load_photos():
+        n = int(os.path.basename(f)[:3])
+        if (split == 'calibration') == (n < 30):
+            out.append((cls, cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV), R.specimen_mask(bgr)))
     return out
 
 
@@ -87,8 +84,13 @@ def main():
         print(f'held-out photos, {label}:')
         for cls in CLASSES:
             c, w, n = evaluate([d for d in held if d[0] == cls])
+            if not n:
+                print(f'   {cls:15s} no held-out photos')
+                continue
             print(f'   {cls:15s} {c}/{n} correct ({c / n:.0%}), {w} wrong, {n - c - w} uncertain')
         c, w, n = evaluate(held)
+        if not n:
+            continue
         print(f'   {"all":15s} {c}/{n} correct ({c / n:.0%}), {w} wrong ({w / n:.0%})')
 
 

@@ -2,7 +2,7 @@
 '''
 Do the colour classifiers work on real minerals, which are never one clean colour?
 
-Runs on the museum photographs extracted by extract_mineral_photos.py. A photo has no
+Runs on the museum photographs downloaded by fetch_commons_photos.py. A photo has no
 depth, so the specimen is separated from its plain backdrop by colour: pixels that differ
 from the median border colour by more than a set distance in Lab. Then:
 
@@ -21,6 +21,7 @@ import csv
 import glob
 import importlib.util
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -37,6 +38,27 @@ baseline_ranges = {
     'vanadinite_ore': ((5, 225, 180), (14, 255, 255)),
 }
 LAB_DIST = 22
+CLASSES = ('azurite_ore', 'malachite_ore', 'vanadinite_ore')
+PHOTO_DIR = os.path.join(HERE, 'mineral_photos')
+
+
+def load_photos(photo_dir=None):
+    """(class, path, BGR image) for every photo, in name order. Exits with what to run when there
+    are none: the photos aren't in the repository, and without them the summaries used to stop
+    with a ZeroDivisionError or IndexError. A file OpenCV can't decode (an interrupted
+    download) is skipped with a warning instead of crashing cvtColor."""
+    photo_dir = photo_dir or PHOTO_DIR
+    out = []
+    for cls in CLASSES:
+        for f in sorted(glob.glob(os.path.join(photo_dir, cls, '*.jpg'))):
+            bgr = cv2.imread(f)
+            if bgr is None:
+                print(f'skipping {os.path.relpath(f, photo_dir)}: not a readable image', file=sys.stderr)
+                continue
+            out.append((cls, f, bgr))
+    if not out:
+        sys.exit(f'No photos in {photo_dir}. Run python3 experiments/fetch_commons_photos.py first.')
+    return out
 
 
 def specimen_mask(bgr):
@@ -62,15 +84,12 @@ def baseline_classify(hsv, mask):
 
 def main():
     rows = []
-    for cls in ('azurite_ore', 'malachite_ore', 'vanadinite_ore'):
-        files = sorted(glob.glob(os.path.join(HERE, 'mineral_photos', cls, '*.jpg')))
-        for f in files:
-            bgr = cv2.imread(f)
-            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-            mask = specimen_mask(bgr)
-            voted, shares = P.classify_face(hsv, mask)
-            rows.append({'photo': os.path.relpath(f, HERE), 'true': cls, 'baseline': baseline_classify(hsv, mask) or 'none',
-                         'voting': voted or 'uncertain', **{f'share_{k.split("_")[0]}': round(v, 3) for k, v in shares.items()}})
+    for cls, f, bgr in load_photos():
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        mask = specimen_mask(bgr)
+        voted, shares = P.classify_face(hsv, mask)
+        rows.append({'photo': os.path.relpath(f, HERE), 'true': cls, 'baseline': baseline_classify(hsv, mask) or 'none',
+                     'voting': voted or 'uncertain', **{f'share_{k.split("_")[0]}': round(v, 3) for k, v in shares.items()}})
     with open(os.path.join(HERE, 'results', 'real_mineral_photos.csv'), 'w', newline='') as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
@@ -83,15 +102,20 @@ def main():
 
 
 def summary(rows):
-    for cls in ('azurite_ore', 'malachite_ore', 'vanadinite_ore'):
+    for cls in CLASSES:
         r = [x for x in rows if x['true'] == cls]
         n = len(r)
+        if not n:
+            print(f'{cls:15s} n=  0  (no photos)')
+            continue
         b = sum(x['baseline'] == cls for x in r)
         v = sum(x['voting'] == cls for x in r)
         vw = sum(x['voting'] not in (cls, 'uncertain') for x in r)
         print(f'{cls:15s} n={n:3d}  baseline {b / n:.0%}  voting {v / n:.0%} correct, {vw / n:.0%} wrong, '
               f'{sum(x["voting"] == "uncertain" for x in r) / n:.0%} uncertain')
     n = len(rows)
+    if not n:
+        return
     print(f'all            n={n:3d}  baseline {sum(x["baseline"] == x["true"] for x in rows) / n:.0%}  '
           f'voting {sum(x["voting"] == x["true"] for x in rows) / n:.0%} correct, '
           f'{sum(x["voting"] not in (x["true"], "uncertain") for x in rows) / n:.0%} wrong')
