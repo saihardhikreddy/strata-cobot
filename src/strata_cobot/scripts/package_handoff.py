@@ -78,6 +78,12 @@ place_xy = (-0.20, -0.70)
 belt_z = -0.142
 place_gap_m = 0.015                 # released this far above the belt
 
+# How far from where odometry puts the package to look for it in the depth image. It used to be
+# 0.12 m, barely more than the package's half-diagonal (0.113 m): with the eBot's pose a few
+# centimetres off, the far edge of the face fell outside, the face never measured as fully in
+# view, and the camera's centre was never used, exactly when odometry needed correcting.
+package_search_m = math.hypot(package_size[0], package_size[1]) / 2 + 0.06
+
 hover_m = 0.10
 lift_clear_m = 0.15                 # package bottom this far above the eBot's deck before carrying
 max_tries = 3
@@ -158,7 +164,8 @@ class package_handoff(A.ore_sorter):
                 m[:3, 3] = [tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z]
                 xyz = P.back_project(self.depth, self.intrinsics, m)
                 with np.errstate(invalid='ignore'):
-                    near = (np.hypot(xyz[..., 0] - guess[0], xyz[..., 1] - guess[1]) < 0.12) & (xyz[..., 2] > -0.3)
+                    near = ((np.hypot(xyz[..., 0] - guess[0], xyz[..., 1] - guess[1]) < package_search_m)
+                            & (xyz[..., 2] > -0.3))
                 pts = xyz[near]
                 pts = pts[np.all(np.isfinite(pts), axis=1)]
                 if len(pts) > 30:

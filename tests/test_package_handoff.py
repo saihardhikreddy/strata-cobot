@@ -69,3 +69,42 @@ def test_package_needs_the_ebot_pose_and_a_depth_image():
     assert node.locate_package() is None
     node.ebot, node.depth, node.intrinsics = (0.5, -0.2, 0.0), None, None
     assert node.locate_package() is None
+
+
+def scene(centre, top=-0.20, step=0.004):
+    """Points a camera above the eBot sees: its deck, and the package's top face (0.178 x 0.140 m,
+    long side along x) centred at `centre`, as an H x W x 3 grid like back_project returns."""
+    xs = np.arange(0.5 - 0.30, 0.5 + 0.30, step)
+    ys = np.arange(-0.2 - 0.25, -0.2 + 0.25, step)
+    gx, gy = np.meshgrid(xs, ys)
+    on_face = (np.abs(gx - centre[0]) <= ph.package_size[0] / 2) & (np.abs(gy - centre[1]) <= ph.package_size[1] / 2)
+    gz = np.where(on_face, top, top - ph.package_size[2])
+    return np.dstack((gx, gy, gz))
+
+
+def located(monkeypatch, centre):
+    node = handoff(0.0)                    # odometry says the package is at (0.5, -0.2)
+    node.depth, node.intrinsics, node.optical_frame = np.zeros((2, 2)), (1, 1, 0, 0), "cam"
+    tf = mock.Mock()
+    tf.transform.rotation.x = tf.transform.rotation.y = tf.transform.rotation.z = 0.0
+    tf.transform.rotation.w = 1.0
+    tf.transform.translation.x = tf.transform.translation.y = tf.transform.translation.z = 0.0
+    node.tf_buffer = mock.Mock(**{"lookup_transform.return_value": tf})
+    node.get_logger = mock.Mock()
+    monkeypatch.setattr(ph.P, "back_project", lambda depth, intrinsics, m: scene(centre))
+    return node.locate_package()
+
+
+def test_package_top_face_height_comes_from_the_camera(monkeypatch):
+    p = located(monkeypatch, (0.5, -0.2))
+    assert p[2] == pytest.approx(-0.20)
+    assert p[:2] == pytest.approx([0.5, -0.2], abs=0.005)
+
+
+@pytest.mark.parametrize("offset", [(0.04, 0.0), (-0.04, 0.0), (0.0, -0.04), (0.03, 0.03)])
+def test_camera_centre_corrects_odometry_that_is_a_few_cm_off(monkeypatch, offset):
+    # With a 0.12 m search radius the far edge of the face fell outside here, so the face never
+    # measured as fully in view and the arm went for the odometry position, centimetres off.
+    centre = (0.5 + offset[0], -0.2 + offset[1])
+    p = located(monkeypatch, centre)
+    assert p[:2] == pytest.approx(centre, abs=0.005)
