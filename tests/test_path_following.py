@@ -61,3 +61,49 @@ def test_path_blocked_looks_the_same_distance_ahead_whatever_the_point_spacing(l
     for x, expected in [(1.4, True), (1.9, False)]:
         nav = follower(plan=plan, progress_idx=0, pose=(0.0, 0.0, 0.0), scan_points=np.array([[x, 0.0]]))
         assert nav.path_blocked() is expected, (leg, x)
+
+
+class _Twist:
+    def __init__(self):
+        self.linear = mock.Mock(x=0.0)
+        self.angular = mock.Mock(z=0.0)
+
+
+def drive(points, final_yaw, pose, cycles=3000, dt=0.05):
+    """Run navigate() against an ideal unicycle base until the follower goes idle."""
+    sent = []
+    nav = follower(pose=pose, plan=np.array(follower().densify(points)), progress_idx=0,
+                   phase='drive', final_yaw=final_yaw, blocked_count=0, paths_done=0)
+    nav.get_logger = mock.Mock()
+    nav.cmd_pub = mock.Mock(publish=sent.append)
+    with mock.patch.object(pf, "Twist", _Twist):
+        for _ in range(cycles):
+            if nav.phase == 'idle':
+                break
+            sent.clear()
+            nav.navigate()
+            v = sent[-1].linear.x if sent else 0.0
+            w = sent[-1].angular.z if sent else 0.0
+            x, y, yaw = nav.pose
+            nav.pose = (x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt, pf.wrap_angle(yaw + w * dt))
+    return nav
+
+
+@pytest.mark.parametrize("final_yaw", [0.0, math.pi / 2, -2.5])
+def test_follower_reaches_the_end_and_turns_to_the_final_heading(final_yaw):
+    nav = drive([(0.0, 0.0), (2.0, 0.0), (2.0, 1.5)], final_yaw, pose=(0.0, 0.0, 0.0))
+    x, y, yaw = nav.pose
+    assert nav.phase == 'idle' and nav.paths_done == 1
+    assert math.hypot(x - 2.0, y - 1.5) < 0.12
+    assert abs(pf.wrap_angle(yaw - final_yaw)) < pf.final_yaw_tol
+
+
+def test_follower_turns_on_the_spot_before_driving_off_backwards():
+    nav = follower(pose=(0.0, 0.0, math.pi), plan=np.array(follower().densify([(0.0, 0.0), (2.0, 0.0)])),
+                   progress_idx=0, phase='drive', final_yaw=0.0, blocked_count=0, paths_done=0)
+    sent = []
+    nav.get_logger = mock.Mock()
+    nav.cmd_pub = mock.Mock(publish=sent.append)
+    with mock.patch.object(pf, "Twist", _Twist):
+        nav.navigate()
+    assert sent[-1].linear.x == 0.0 and abs(sent[-1].angular.z) == pf.max_angular_rps
