@@ -416,6 +416,17 @@ def make_handler(node, runner):
 
         def do_POST(self):
             path = urlparse(self.path).path
+            # Only the dashboard's own page may start, stop or change a run. Any web page open in
+            # the same browser could otherwise POST here (a form or a text/plain fetch needs no
+            # CORS preflight) and launch the simulation. The page sends JSON from this origin;
+            # a JSON content type from another origin needs a preflight, which this server
+            # never grants, and a request with another Origin is refused outright.
+            origin = self.headers.get('Origin')
+            if origin is not None and urlparse(origin).netloc != self.headers.get('Host'):
+                return self.send(403, b'{"ok": false, "message": "cross-site request refused"}', 'application/json')
+            if (self.headers.get('Content-Type') or '').split(';')[0].strip().lower() != 'application/json':
+                return self.send(415, b'{"ok": false, "message": "send JSON (Content-Type: application/json)"}',
+                                 'application/json')
             try:
                 n = int(self.headers.get('Content-Length') or 0)
                 body = json.loads(self.rfile.read(n) or b'{}')

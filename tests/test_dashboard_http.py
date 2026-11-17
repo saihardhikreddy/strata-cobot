@@ -30,9 +30,11 @@ def server():
     srv.shutdown()
 
 
-def request(srv, method, path, body=None):
+def request(srv, method, path, body=None, headers=None):
     conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
-    conn.request(method, path, body=body)
+    if headers is None:
+        headers = {"Content-Type": "application/json"} if method == "POST" else {}
+    conn.request(method, path, body=body, headers=headers)
     res = conn.getresponse()
     return res.status, res.read()
 
@@ -74,3 +76,23 @@ def test_static_files_stay_inside_the_static_folder(server, tmp_path, monkeypatc
     status, body = request(srv, "GET", "/static/../static_old/secret.txt")
     assert status == 404 and b"not for the web" not in body
     assert request(srv, "GET", "/static/" + os.path.join("..", "..", "etc", "passwd"))[0] == 404
+
+
+def test_other_sites_cannot_drive_the_dashboard(server):
+    srv, runner = server
+    body = json.dumps({"mode": "lap"})
+    # A form or text/plain fetch from any page: no preflight, so the content type is the check.
+    status, _ = request(srv, "POST", "/api/run", body, {"Content-Type": "text/plain"})
+    assert status == 415
+    # A request that says it comes from another site.
+    status, _ = request(srv, "POST", "/api/stop", "{}",
+                        {"Content-Type": "application/json", "Origin": "http://evil.example"})
+    assert status == 403
+    runner.start.assert_not_called()
+    runner.stop.assert_not_called()
+    # The dashboard's own page: same origin, JSON.
+    port = srv.server_address[1]
+    status, _ = request(srv, "POST", "/api/run", body,
+                        {"Content-Type": "application/json; charset=utf-8", "Origin": f"http://127.0.0.1:{port}"})
+    assert status == 200
+    runner.start.assert_called_once_with("lap", False)
