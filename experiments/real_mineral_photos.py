@@ -19,7 +19,6 @@ Writes experiments/results/real_mineral_photos.csv
 '''
 import csv
 import glob
-import importlib.util
 import os
 import sys
 
@@ -28,9 +27,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-spec = importlib.util.spec_from_file_location('ore_perception', os.path.join(ROOT, 'src/strata_cobot/scripts/ore_perception.py'))
-P = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(P)
+sys.path.insert(0, HERE)
+from perception import load_ore_perception  # noqa: E402
+
+P = load_ore_perception()
 
 baseline_ranges = {
     'azurite_ore':    ((98, 200, 100), (112, 255, 255)),

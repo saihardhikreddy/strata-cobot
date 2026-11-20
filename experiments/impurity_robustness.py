@@ -17,7 +17,6 @@ Writes experiments/results/impurity_robustness.csv and a plot in docs/images/.
     python3 experiments/impurity_robustness.py
 '''
 import csv
-import importlib.util
 import json
 import os
 import sys
@@ -27,9 +26,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-spec = importlib.util.spec_from_file_location('ore_perception', os.path.join(ROOT, 'src/strata_cobot/scripts/ore_perception.py'))
-P = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(P)
+sys.path.insert(0, HERE)
+from perception import load_ore_perception  # noqa: E402
+
+P = load_ore_perception()
 
 LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]   # share of each ore's coloured area covered
 TRIALS = 40

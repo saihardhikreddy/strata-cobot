@@ -18,6 +18,7 @@ import csv
 import importlib.util
 import itertools
 import os
+import sys
 
 import cv2
 
@@ -32,7 +33,10 @@ def load(name, path):
     return mod
 
 
-P = load('ore_perception', os.path.join(ROOT, 'src/strata_cobot/scripts/ore_perception.py'))
+sys.path.insert(0, HERE)
+from perception import load_ore_perception  # noqa: E402
+
+P = load_ore_perception()
 R = load('real_mineral_photos', os.path.join(HERE, 'real_mineral_photos.py'))
 CLASSES = R.CLASSES
 

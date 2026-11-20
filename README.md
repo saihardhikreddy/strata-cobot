@@ -50,7 +50,7 @@ Real ores are rarely one clean colour: veins of other minerals, dark or brown ma
 | Vanadinite | 17% | 93% |
 | **All 90** | **11%** | **70%** |
 
-Reproduce with the scripts in [`experiments/`](experiments/) (ROS 2 sourced):
+Reproduce with the scripts in [`experiments/`](experiments/). They need Python with OpenCV, NumPy and SciPy, not ROS 2:
 
 ```bash
 python3 experiments/impurity_robustness.py     # painted impurities on a captured camera frame
